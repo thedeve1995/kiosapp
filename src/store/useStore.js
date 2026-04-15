@@ -1,6 +1,9 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 
-export const useStore = create((set) => ({
+export const useStore = create(
+  persist(
+    (set) => ({
   user: null,         // Owner or Employee
   setUser: (user) => set({ user }),
 
@@ -22,4 +25,6 @@ export const useStore = create((set) => ({
   
   shift: null,        // current shift info
   setShift: (shift) => set({ shift }),
+}), {
+  name: 'kios-finance-storage',
 }));

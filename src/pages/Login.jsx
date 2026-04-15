@@ -16,10 +16,14 @@ export default function Login() {
 
   useEffect(() => {
     const checkUsers = async () => {
-      const q = query(collection(db, 'users'), limit(1));
-      const snap = await getDocs(q);
-      console.log("Debug: Users found in DB?", !snap.empty);
-      if (snap.empty) setNoUsers(true);
+      try {
+        const q = query(collection(db, 'users'), limit(1));
+        const snap = await getDocs(q);
+        if (snap.empty) setNoUsers(true);
+      } catch (err) {
+        console.warn("checkUsers failed (likely due to unauthenticated access to firestore rules):", err.message);
+        // We can ignore this or assume noUsers=false if we don't have permission to check
+      }
     };
     checkUsers();
   }, []);
@@ -40,8 +44,11 @@ export default function Login() {
         setErr('User role not found');
       }
     } catch (error) {
+       console.error("Login Error:", error);
        if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
           setErr('Email atau Password salah.');
+       } else if (error.message.includes('Missing or insufficient permissions')) {
+          setErr('Akses dihentikan oleh aturan keamanan sistem (Permission Denied). Hubungi Owner.');
        } else {
           setErr(error.message);
        }

@@ -99,8 +99,20 @@ export default function AdminDashboard() {
 
   const totalPemasukan = transactions.filter(t => !['adjustment', 'expenditure'].includes(t.type) && t.status !== 'cancelled').reduce((s, t) => s + (t.total || 0), 0);
   const totalPengeluaran = transactions.filter(t => t.type === 'expenditure' && t.status !== 'cancelled').reduce((s, t) => s + (t.total || 0), 0);
-  const totalLaba = transactions.filter(t => !['adjustment', 'expenditure'].includes(t.type) && t.status !== 'cancelled').reduce((s, t) => s + (t.profit || 0), 0);
+  const totalLaba = transactions.filter(t => !['adjustment', 'expenditure'].includes(t.type) && t.status !== 'cancelled').reduce((s, t) => {
+    if (t.items && t.items.length > 0) {
+      const itemsProfit = t.items.reduce((sum, it) => {
+        const q = Number(it.qty) || 1;
+        if (it.action === 'tarik') return sum + ((Number(it.fee) || 0) * q);
+        const cost = Number(it.costPrice) || 0;
+        return sum + (cost > 0 ? (Number(it.price || 0) - cost) * q : 0);
+      }, 0);
+      return s + itemsProfit;
+    }
+    return s + (Number(t.profit) || 0);
+  }, 0);
   const totalBatal = transactions.filter(t => t.status === 'cancelled').length;
+  const pendingCancellations = transactions.filter(t => t.status === 'pending_cancellation' || t.status === 'cancellation_requested');
   
   const stats = [
     { title: 'Total Pemasukan', value: `Rp ${totalPemasukan.toLocaleString()}`, icon: TrendingUp, color: 'text-blue-500', bg: 'bg-blue-50' },
@@ -126,12 +138,30 @@ export default function AdminDashboard() {
   })();
 
   const reportTotal = filteredReportTrans.reduce((s, t) => s + (t.total || 0), 0);
-  const reportProfit = filteredReportTrans.reduce((s, t) => s + (t.profit || 0), 0);
+  const reportProfit = filteredReportTrans.reduce((s, t) => {
+    if (t.items && t.items.length > 0) {
+      const itemsProfit = t.items.reduce((sum, it) => {
+        const q = Number(it.qty) || 1;
+        if (it.action === 'tarik') return sum + ((Number(it.fee) || 0) * q);
+        const cost = Number(it.costPrice) || 0;
+        return sum + (cost > 0 ? (Number(it.price || 0) - cost) * q : 0);
+      }, 0);
+      return s + itemsProfit;
+    }
+    return s + (Number(t.profit) || 0);
+  }, 0);
   const reportAvg = filteredReportTrans.length ? Math.round(reportTotal / filteredReportTrans.length) : 0;
   const categorySummary = filteredReportTrans.filter(t => !['adjustment', 'expenditure'].includes(t.type)).reduce((acc, t) => {
-    t.items?.forEach(item => {
-      const cat = item.category || 'Lainnya';
-      acc[cat] = (acc[cat] || 0) + (item.price * item.qty);
+    t.items?.forEach(it => {
+      const cat = it.category || 'Lainnya';
+      const q = Number(it.qty) || 1;
+      let pft = 0;
+      if (it.action === 'tarik') pft = (Number(it.fee) || 0) * q;
+      else {
+        const cost = Number(it.costPrice) || 0;
+        pft = cost > 0 ? (Number(it.price || 0) - cost) * q : 0;
+      }
+      acc[cat] = (acc[cat] || 0) + pft;
     });
     return acc;
   }, {});
@@ -290,6 +320,46 @@ export default function AdminDashboard() {
             </div>
           ))}
         </div>
+
+        {/* ===================== SECTION: PERMINTAAN PEMBATALAN ===================== */}
+        {pendingCancellations.length > 0 && (
+          <div className="bg-amber-50 rounded-3xl p-6 shadow-sm border border-amber-200">
+             <div className="flex items-center gap-2 mb-4">
+                <AlertOctagon size={24} className="text-amber-600"/>
+                <h3 className="font-bold text-amber-800 text-lg">Permintaan Pembatalan ({pendingCancellations.length})</h3>
+             </div>
+             <div className="space-y-3">
+                {pendingCancellations.map(t => (
+                   <div key={t.id} className="bg-white p-4 rounded-2xl border border-amber-100 shadow-sm transition-all hover:border-amber-300">
+                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                         <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                               <p className="font-black text-slate-800">{t.user}</p>
+                               <span className="text-[10px] text-slate-400 font-normal">
+                                 {t.timestamp ? new Date(t.timestamp.seconds * 1000).toLocaleString('id-ID') : '-'}
+                               </span>
+                               <span className="bg-amber-100 text-amber-700 text-[9px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">MENUNGGU RESPON</span>
+                            </div>
+                            <p className="text-xs text-slate-600 mt-1 italic">{t.items?.map(it=>it.name).join(', ') || t.type}</p>
+                            <p className="text-sm font-black text-red-500 mt-1">Rp {t.total?.toLocaleString()}</p>
+                            {t.profit !== undefined && t.profit > 0 && (
+                               <p className="text-[10px] font-bold text-amber-500 italic -mt-0.5">Laba: Rp {t.profit?.toLocaleString()}</p>
+                            )}
+                         </div>
+                         <div className="flex items-center gap-2 w-full sm:w-auto mt-2 sm:mt-0 shrink-0">
+                            <button onClick={() => handleApproveCancellation(t)} className="flex-1 sm:flex-none px-4 py-2 bg-emerald-50 text-emerald-600 font-bold rounded-xl text-xs hover:bg-emerald-100 flex items-center justify-center gap-2 transition-colors">
+                               <Check size={16}/> Setujui
+                            </button>
+                            <button onClick={() => handleRejectCancellation(t.id)} className="flex-1 sm:flex-none px-4 py-2 bg-red-50 text-red-600 font-bold rounded-xl text-xs hover:bg-red-100 flex items-center justify-center gap-2 transition-colors">
+                               <X size={16}/> Tolak
+                            </button>
+                         </div>
+                      </div>
+                   </div>
+                ))}
+             </div>
+          </div>
+        )}
 
         {/* ===================== SECTION: SDM ===================== */}
         <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
@@ -495,7 +565,7 @@ export default function AdminDashboard() {
                     </div>
                     {/* Category Breakdown */}
                     <div className="bg-slate-50 rounded-2xl p-4 border border-dashed border-slate-200">
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-3">Pendapatan Per Kategori</p>
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-3">Laba Per Kategori</p>
                       {Object.entries(categorySummary).length === 0 && <p className="text-xs italic text-slate-400 text-center">Tidak ada data</p>}
                       <div className="space-y-2">
                         {Object.entries(categorySummary).sort((a,b)=>b[1]-a[1]).map(([cat, val]) => (
@@ -572,7 +642,7 @@ export default function AdminDashboard() {
                                   {t.type === 'adjustment' && <span className="bg-yellow-50 text-yellow-600 text-[9px] font-bold px-1.5 py-0.5 rounded-full">AUDIT</span>}
                                   {t.type === 'expenditure' && <span className="bg-orange-50 text-orange-600 text-[9px] font-bold px-1.5 py-0.5 rounded-full">PENGELUARAN</span>}
                                   {t.status === 'cancelled' && <span className="bg-red-100 text-red-600 text-[9px] font-bold px-1.5 py-0.5 rounded-full">BATAL</span>}
-                                  {t.status === 'pending_cancellation' && <span className="bg-amber-100 text-amber-700 text-[9px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">MINTA BATAL</span>}
+                                  {(t.status === 'pending_cancellation' || t.status === 'cancellation_requested') && <span className="bg-amber-100 text-amber-700 text-[9px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">MINTA BATAL</span>}
                                   {t.closed && <span className="bg-slate-100 text-slate-500 text-[9px] font-bold px-1.5 py-0.5 rounded-full flex items-center gap-0.5"><FileCheck2 size={10}/> Closed</span>}
                                 </div>
                                 <p className="text-[10px] text-slate-400 italic truncate mt-0.5">{t.items?.map(it=>it.name).join(', ') || (t.type === 'adjustment' ? 'Penyesuaian Manual' : '-')}</p>
@@ -585,7 +655,7 @@ export default function AdminDashboard() {
                                 {!['adjustment', 'cancelled'].includes(t.status) && t.profit !== undefined && t.profit > 0 && (
                                    <span className="text-[10px] font-bold text-amber-500 italic block -mt-0.5 leading-tight">Laba: Rp {t.profit?.toLocaleString()}</span>
                                 )}
-                                {t.status === 'pending_cancellation' && (
+                                {(t.status === 'pending_cancellation' || t.status === 'cancellation_requested') && (
                                   <div className="flex gap-1 mt-1 justify-end">
                                     <button onClick={(e) => { e.stopPropagation(); handleApproveCancellation(t); }} className="p-1 bg-emerald-50 text-emerald-600 rounded-lg hover:bg-emerald-100" title="Setujui"><Check size={14}/></button>
                                     <button onClick={(e) => { e.stopPropagation(); handleRejectCancellation(t.id); }} className="p-1 bg-red-50 text-red-600 rounded-lg hover:bg-red-100" title="Tolak"><X size={14}/></button>

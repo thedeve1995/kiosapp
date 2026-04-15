@@ -62,9 +62,6 @@ export default function Closing() {
       const fee = (item.fee || 0) * q;
       const nominal = (item.nominal || 0) * q;
       
-      // LOGIKA KAS FISIK:
-      // Untuk Tarik Tunai: Uang keluar laci adalah NOMINAL.
-      // Jika Fee dibayar Cash, maka Uang masuk laci adalah Fee.
       if (item.action === 'tarik') {
         acc.realPengeluaran += nominal;
         if (item.feePaidVia === 'cash') {
@@ -73,25 +70,22 @@ export default function Closing() {
       } else if (item.action === 'restock' || t.type === 'expenditure') {
         acc.realPengeluaran += total;
       } else {
-        // Penjualan barang stok atau Top Up (Pelanggan kasih cash senilai total)
         acc.realPemasukan += total;
       }
     });
 
-    // Profit logic (use the precalculated profit if available, else calculate)
-    if (t.type === 'expenditure') {
-       acc.realProfit += (t.profit || 0);
-    } else {
-       t.items?.forEach(item => {
-          const q = item.qty || 1;
-          const cost = item.costPrice !== undefined ? item.costPrice : item.price;
-          if (item.action === 'tarik') {
-             acc.realProfit += (item.price - item.nominal) * q;
-          } else {
-             acc.realProfit += (item.price - cost) * q;
-          }
-       });
-    }
+    const transProfit = (t.type === 'expenditure') 
+      ? 0 
+      : (t.items && t.items.length > 0 
+          ? t.items.reduce((sum, it) => {
+              const q = Number(it.qty) || 1;
+              if (it.action === 'tarik') return sum + ((Number(it.fee) || 0) * q);
+              if (it.action === 'restock') return sum;
+              const cost = Number(it.costPrice) || 0;
+              return sum + (cost > 0 ? (Number(it.price || 0) - cost) * q : 0);
+            }, 0)
+          : (Number(t.profit) || 0));
+    acc.realProfit += transProfit;
 
     return acc;
   }, { realPemasukan: 0, realPengeluaran: 0, realProfit: 0 });

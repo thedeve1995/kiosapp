@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '../store/useStore';
-import { ShoppingCart, Plus, Minus, X, Trash2, Wallet, History, Clock, AlertOctagon, Loader2, ShoppingBag, FileCheck2 } from 'lucide-react';
+import { ShoppingCart, Plus, Minus, X, Trash2, Wallet, History, Clock, AlertOctagon, Loader2, ShoppingBag, FileCheck2, Search } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { db } from '../lib/firebase';
 import { collection, onSnapshot, doc, writeBatch, addDoc, serverTimestamp, setDoc, query, where, updateDoc } from 'firebase/firestore';
@@ -8,6 +8,7 @@ import { collection, onSnapshot, doc, writeBatch, addDoc, serverTimestamp, setDo
 export default function POS() {
   const { cart, addToCart, updateCartQty, removeFromCart, clearCart } = useStore();
   const [activeCategory, setActiveCategory] = useState('Semua');
+  const [searchQuery, setSearchQuery] = useState('');
   const [cartOpen, setCartOpen] = useState(false);
   const [jasaModal, setJasaModal] = useState(null); // { item, nominal, fee }
   const [products, setProducts] = useState([]);
@@ -82,9 +83,10 @@ export default function POS() {
     }
   };
 
-  const filteredProducts = activeCategory === 'Semua' 
+  const filteredProducts = (activeCategory === 'Semua' 
     ? products 
-    : products.filter(p => p.category === activeCategory);
+    : products.filter(p => p.category === activeCategory))
+    .filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase()));
 
   const totalCart = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
 
@@ -114,7 +116,7 @@ export default function POS() {
       fee: feeNum,
       feePaidVia: item.action === 'tarik' ? feePaidVia : 'transfer',
       price: (nominalNum + feeNum),
-      costPrice: parseFloat(jasaModal.costPrice) || nominalNum,
+      costPrice: parseFloat(jasaModal.costPrice) || parseFloat(item.costPrice) || nominalNum,
     };
     addToCart(cartItem);
     setJasaModal(null);
@@ -176,7 +178,13 @@ export default function POS() {
       const transactionData = {
         items: cart.map(it => ({ ...it, total: (it.price * (it.qty || 1)) })),
         total: totalCart,
-        profit: cart.reduce((sum, it) => sum + ((it.price - (it.costPrice || it.price)) * (it.qty || 1)), 0),
+        profit: cart.reduce((sum, it) => {
+          const q = it.qty || 1;
+          if (it.action === 'tarik') return sum + ((it.fee || 0) * q);
+          const cost = Number(it.costPrice) || 0;
+          const itemsProfit = cost > 0 ? (it.price - cost) * q : 0;
+          return sum + itemsProfit;
+        }, 0),
         timestamp: serverTimestamp(),
         shift: shift || 'Unknown',
         user: user?.name || 'Unknown User',
@@ -294,8 +302,27 @@ export default function POS() {
         </button>
       </div>
 
+      {/* Search Bar */}
+      <div className="px-6 pb-2 pt-2 bg-slate-50">
+         <div className="relative">
+           <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+           <input 
+             type="text" 
+             placeholder="Cari produk..." 
+             value={searchQuery}
+             onChange={(e) => setSearchQuery(e.target.value)}
+             className="w-full bg-white border border-slate-200 rounded-2xl pl-11 pr-4 py-3 text-sm font-bold placeholder:font-normal focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 shadow-sm transition-all"
+           />
+           {searchQuery && (
+             <button onClick={() => setSearchQuery('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+               <X size={16} />
+             </button>
+           )}
+         </div>
+      </div>
+
       {/* Categories Horizontal Scroll */}
-      <div className="bg-white border-b px-6 py-4 overflow-x-auto whitespace-nowrap sticky top-0 z-40 shadow-sm flex gap-3 no-scrollbar">
+      <div className="bg-white border-b px-6 py-3 overflow-x-auto whitespace-nowrap sticky top-0 z-40 shadow-sm flex gap-3 no-scrollbar">
         {categories.map(cat => (
           <button
             key={cat}

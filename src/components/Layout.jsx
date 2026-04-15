@@ -2,13 +2,16 @@ import { Outlet, useNavigate } from 'react-router-dom';
 import { useStore } from '../store/useStore';
 import { LogOut, Home, KeyRound, Menu } from 'lucide-react';
 import { useState } from 'react';
+import { auth } from '../lib/firebase';
+import { signOut } from 'firebase/auth';
 
 export default function Layout() {
   const { user, shift, setUser } = useStore();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await signOut(auth);
     setUser(null);
     navigate('/login');
   };
