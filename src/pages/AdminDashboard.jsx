@@ -296,6 +296,42 @@ export default function AdminDashboard() {
     } catch (e) { alert(e.message); }
   };
 
+  const handleResetData = async () => {
+    if (!window.confirm("HAPUS SEMUA DATA TRANSAKSI, CLOSING, DAN KARYAWAN?")) return;
+    if (!window.confirm("PERINGATAN TERAKHIR: Tindakan ini tidak dapat dibatalkan. Semua catatan keuangan dan data karyawan akan dihapus permanen. Lanjutkan?")) return;
+    
+    setLoadingBal(true);
+    try {
+      const clearCollection = async (colPath, queryConstraints = []) => {
+        const q = queryConstraints.length > 0 ? query(collection(db, colPath), ...queryConstraints) : collection(db, colPath);
+        const snap = await getDocs(q);
+        let batch = writeBatch(db);
+        let count = 0;
+        
+        for (const docSnap of snap.docs) {
+          batch.delete(docSnap.ref);
+          count++;
+          if (count === 500) {
+            await batch.commit();
+            batch = writeBatch(db);
+            count = 0;
+          }
+        }
+        if (count > 0) await batch.commit();
+      };
+
+      await clearCollection('transactions');
+      await clearCollection('shift_closings');
+      await clearCollection('users', [where('role', '==', 'employee')]);
+
+      alert("Semua data (Transaksi, Closing, Karyawan) berhasil direset!");
+    } catch (e) {
+      alert("Gagal reset data: " + e.message);
+    } finally {
+      setLoadingBal(false);
+    }
+  };
+
   // === RENDER ===
   return (
     <div className="flex-1 overflow-y-auto bg-slate-50 p-4 pb-20">
@@ -725,9 +761,14 @@ export default function AdminDashboard() {
         {/* ===================== FOOTER ===================== */}
         <div className="mt-12 pt-8 border-t border-slate-200 flex flex-col md:flex-row justify-between items-center gap-4">
            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest italic opacity-50">Kiosk Finance System • 2026</p>
-           <button onClick={handleDeleteSelf} className="text-xs font-black text-red-500 hover:text-red-700 flex items-center gap-2 uppercase tracking-tighter border border-red-200 px-4 py-2 rounded-xl hover:bg-red-50 transition-all">
-              <Trash2 size={14}/> Hapus Akun Owner (Resiko Tinggi)
-           </button>
+           <div className="flex gap-2">
+             <button onClick={handleResetData} className="text-xs font-black text-amber-600 hover:text-amber-700 flex items-center gap-2 uppercase tracking-tighter border border-amber-200 px-4 py-2 rounded-xl hover:bg-amber-50 transition-all">
+                <History size={14}/> Reset Semua Data (Transaksi, Closing, SDM)
+             </button>
+             <button onClick={handleDeleteSelf} className="text-xs font-black text-red-500 hover:text-red-700 flex items-center gap-2 uppercase tracking-tighter border border-red-200 px-4 py-2 rounded-xl hover:bg-red-50 transition-all">
+                <Trash2 size={14}/> Hapus Akun Owner (Resiko Tinggi)
+             </button>
+           </div>
         </div>
 
       </div>
