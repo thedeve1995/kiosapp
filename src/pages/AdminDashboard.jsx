@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '../store/useStore';
 import { db } from '../lib/firebase';
-import { collection, onSnapshot, doc, setDoc, query, where, serverTimestamp, addDoc, updateDoc, increment, writeBatch, deleteDoc, getDocs } from 'firebase/firestore';
+import { collection, onSnapshot, doc, setDoc, query, where, serverTimestamp, addDoc, updateDoc, increment, writeBatch, deleteDoc, getDocs, orderBy, limit } from 'firebase/firestore';
 import { initializeApp, getApp, getApps } from 'firebase/app';
 import { createUserWithEmailAndPassword, getAuth } from 'firebase/auth';
 import { useNavigate } from 'react-router-dom';
@@ -73,7 +73,10 @@ export default function AdminDashboard() {
   // Fetch transactions, products, balances
   useEffect(() => {
     if (user?.role !== 'owner') return;
-    const unsubTrans = onSnapshot(collection(db, 'transactions'), (snap) => {
+    
+    // Perbaikan batas limit harian Firebase Reads
+    const qTrans = query(collection(db, 'transactions'), orderBy('timestamp', 'desc'), limit(500));
+    const unsubTrans = onSnapshot(qTrans, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setTransactions(data.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0)));
     });

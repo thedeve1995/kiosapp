@@ -3,7 +3,7 @@ import { useStore } from '../store/useStore';
 import { useNavigate } from 'react-router-dom';
 import { LogOut, Calculator, FileCheck2, Loader2, History, AlertOctagon } from 'lucide-react';
 import { db } from '../lib/firebase';
-import { collection, onSnapshot, doc, query, where, addDoc, serverTimestamp, writeBatch, getDocs, limit } from 'firebase/firestore';
+import { collection, onSnapshot, doc, query, where, addDoc, serverTimestamp, writeBatch, getDocs, limit, orderBy } from 'firebase/firestore';
 
 export default function Closing() {
   const { shift, user, setUser } = useStore();
@@ -37,13 +37,16 @@ export default function Closing() {
     const today = new Date();
     today.setHours(0,0,0,0);
     
-    // Ambil semua transaksi yang BELUM di-close (label 'closed' tidak ada atau false)
-    const q = query(collection(db, 'transactions'), where('status', '!=', 'cancelled'));
+    // Optimasi Reads: Ambil 500 transaksi terbaru, filter manual status dan 'closed' di sisi client
+    // agar kita tidak membaca ribuan histori data lama.
+    const q = query(collection(db, 'transactions'), orderBy('timestamp', 'desc'), limit(500));
     
     const unsubTrans = onSnapshot(q, (snap) => {
       const allData = snap.docs.map(d => ({ ...d.data(), id: d.id }));
-      // Filter hanya yang belum di-close
-      setShiftTrans(allData.filter(t => !t.closed && t.type !== 'adjustment'));
+      // Filter histori terbaru yang BUKAN dibatalkan, BELUM closed, dan BUKAN adjustment
+      setShiftTrans(
+        allData.filter(t => !t.closed && t.status !== 'cancelled' && t.type !== 'adjustment')
+      );
     });
 
     // Ambil produk untuk rekap stok
