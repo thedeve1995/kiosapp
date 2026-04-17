@@ -11,6 +11,7 @@ export default function Closing() {
   
   const [balances, setBalances] = useState({ cash: 0 });
   const [shiftTrans, setShiftTrans] = useState([]);
+  const [products, setProducts] = useState([]);
   const [actualCash, setActualCash] = useState('');
   const [loading, setLoading] = useState(false);
   const [ownerWA, setOwnerWA] = useState('');
@@ -45,7 +46,16 @@ export default function Closing() {
       setShiftTrans(allData.filter(t => !t.closed && t.type !== 'adjustment'));
     });
 
-    return () => { unsubBal(); unsubTrans(); };
+    // Ambil produk untuk rekap stok
+    const unsubProd = onSnapshot(collection(db, 'products'), (snapshot) => {
+      if (!snapshot.empty) {
+        setProducts(snapshot.docs.map(doc => ({ firebaseId: doc.id, ...doc.data() })));
+      } else {
+        setProducts([]);
+      }
+    });
+
+    return () => { unsubBal(); unsubTrans(); unsubProd(); };
   }, [shift]);
 
   // Semua transaksi yang belum di-close akan masuk ke laporan ini
@@ -160,6 +170,17 @@ export default function Closing() {
         return `[${time}] ${sign}Rp ${(t.total || 0).toLocaleString()}\n_${items}_`;
       }).join('\n');
 
+      const gasProducts = products.filter(p => p.type === 'stok' && p.name.toLowerCase().includes('gas'));
+      const voucherProducts = products.filter(p => p.type === 'stok' && p.category?.toLowerCase().includes('voucher'));
+
+      const gasText = gasProducts.length > 0 
+        ? gasProducts.map(p => `- ${p.name}: ${p.stock}`).join('\n')
+        : '- (Tidak ada item Gas)';
+
+      const voucherText = voucherProducts.length > 0 
+        ? voucherProducts.map(p => `- ${p.name}: ${p.stock}`).join('\n')
+        : '- (Tidak ada item Voucher)';
+
       const waText = `*LAPORAN CLOSING SHIFT*\n` +
         `--------------------------\n` +
         `Petugas: ${user.name}\n` +
@@ -175,6 +196,10 @@ export default function Closing() {
         `Fisik Laci: Rp ${parseFloat(actualCash).toLocaleString()}\n\n` +
         `Estimasi Laba Shift: *Rp ${realProfit.toLocaleString()}*\n` +
         `Selisih: ${selisih > 0 ? '+' : ''}Rp ${selisih.toLocaleString()}\n` +
+        `--------------------------\n` +
+        `*SISA STOK:*\n` +
+        `[GAS]\n${gasText}\n\n` +
+        `[VOUCHER]\n${voucherText}\n` +
         `--------------------------\n` +
         `*SETORAN KE OWNER: Rp ${setoran.toLocaleString()}*\n` +
         (isBelowModal ? `\n_Keterangan: ${keterangan}_` : "") +
