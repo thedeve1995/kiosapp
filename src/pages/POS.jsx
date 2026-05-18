@@ -1,40 +1,121 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '../store/useStore';
-import { ShoppingCart, Plus, Minus, X, Trash2, Wallet, History, Clock, AlertOctagon, Loader2, ShoppingBag, FileCheck2, Search } from 'lucide-react';
+import { ShoppingCart, Plus, Minus, X, Trash2, Wallet, History, Clock, AlertOctagon, Loader2, ShoppingBag, FileCheck2, Search, ClipboardList, CheckCircle2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { db } from '../lib/firebase';
-import { collection, onSnapshot, doc, writeBatch, addDoc, serverTimestamp, setDoc, query, where, updateDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, writeBatch, addDoc, serverTimestamp, setDoc, query, where, updateDoc, increment } from 'firebase/firestore';
+
+// === Helper Functions ===
+
+/** Hitung profit untuk satu item di cart */
+function getItemProfit(item) {
+  const q = item.qty || 1;
+  if (item.action === 'tarik') return (item.fee || 0) * q;
+  const cost = Number(item.costPrice) || 0;
+  return cost > 0 ? (item.price - cost) * q : 0;
+}
+
+function getItemBalanceDeltas(item, paymentMethod) {
+  const q = item.qty || 1;
+  const fee = (item.fee || 0) * q;
+  const nominal = (item.nominal || 0) * q;
+  const price = item.price * q;
+  const cost = (Number(item.costPrice) || 0) * q;
+
+  let cash = 0, seabank = 0, apk = 0;
+
+  // --- Sisi Pendapatan (uang masuk dari pelanggan) ---
+  if (paymentMethod !== 'kasbon') {
+    if (item.action === 'tarik') {
+      // Tarik Tunai: Kas keluar sebesar nominal, tapi fee masuk jika dibayar cash
+      cash -= nominal;
+      if (item.feePaidVia === 'cash') cash += fee;
+    } else if (item.type === 'stok') {
+      // Barang fisik: tergantung metode bayar
+      if (paymentMethod === 'transfer') {
+        seabank += price;
+      } else {
+        cash += price;
+      }
+    } else {
+      // Jasa/Saldo selain tarik (Top Up, Transfer, dll): tergantung metode bayar
+      if (paymentMethod === 'transfer') {
+        seabank += price;
+      } else {
+        cash += price;
+      }
+    }
+  } else {
+    // Jika kasbon, kita tidak menerima pembayaran harga layanan/barang.
+    // Tapi jika item adalah 'tarik' tunai, kas fisik tetap keluar ke tangan pelanggan.
+    if (item.action === 'tarik') {
+      cash -= nominal;
+    }
+  }
+
+  // --- Sisi Modal (uang keluar untuk fulfillment) ---
+  if (item.type === 'jasa' || item.type === 'saldo') {
+    if (item.action === 'transfer') {
+      seabank -= cost;
+    } else if (item.action === 'tarik') {
+      // Tarik: uang masuk ke bank = nominal + fee (jika fee via transfer)
+      // Jika kasbon, fee tidak masuk sekarang.
+      seabank += nominal + (paymentMethod !== 'kasbon' && item.feePaidVia === 'transfer' ? fee : 0);
+    } else {
+      apk -= cost;
+    }
+  }
+
+  return { cash, seabank, apk };
+}
 
 export default function POS() {
   const { cart, addToCart, updateCartQty, removeFromCart, clearCart } = useStore();
-  const [activeCategory, setActiveCategory] = useState('Semua');
   const [searchQuery, setSearchQuery] = useState('');
+  const [logSearchQuery, setLogSearchQuery] = useState('');
   const [cartOpen, setCartOpen] = useState(false);
   const [jasaModal, setJasaModal] = useState(null); // { item, nominal, fee }
   const [products, setProducts] = useState([]);
-  
-  // Ambil kategori unik secara dinamis dari database produk
-  const categories = ['Semua', ...new Set(products.map(p => p.category))].filter(Boolean);
   const [balances, setBalances] = useState({ apk: 0, seabank: 0, cash: 0 });
+  const [balanceLoading, setBalanceLoading] = useState(true);
   const [showConfirm, setShowConfirm] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [shiftLogs, setShiftLogs] = useState([]);
   const [loadingCancel, setLoadingCancel] = useState(null);
-  const [restockModal, setRestockModal] = useState(null); 
-  const [restockForm, setRestockForm] = useState({ qty: '', totalCost: '' });
+  
+  const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
+  const [startTime, setStartTime] = useState('00:00');
+  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [endTime, setEndTime] = useState('23:59');
+  
+  const [belanjaModal, setBelanjaModal] = useState(false);
+  const [belanjaForm, setBelanjaForm] = useState({ name: '', total: '' });
+  const [paymentMethod, setPaymentMethod] = useState('cash'); // 'cash' | 'transfer' | 'kasbon'
+  const [kasbonName, setKasbonName] = useState('');
+
+  const [globalRestockModal, setGlobalRestockModal] = useState(false);
+  const [globalRestockForm, setGlobalRestockForm] = useState({ productId: '', qty: '', totalCost: '' });
+
+  const [kasbonModalOpen, setKasbonModalOpen] = useState(false);
+  const [kasbonList, setKasbonList] = useState([]);
+
   const { shift, user } = useStore();
 
   // Sync Global Balances
   useEffect(() => {
+    if (!user) return;
     const unsub = onSnapshot(doc(db, 'balances', 'current'), (d) => {
-      if (d.exists()) setBalances(d.data());
-      else setDoc(doc(db, 'balances', 'current'), { apk: 5000000, seabank: 5000000, cash: 1000000 }); // Default initial
+      if (d.exists()) {
+        setBalances(d.data());
+      }
+      setBalanceLoading(false);
     });
     return () => unsub();
-  }, []);
+  }, [user]);
 
   // Sync to Firestore Products
   useEffect(() => {
+    if (!user) return;
     const unsub = onSnapshot(collection(db, 'products'), (snapshot) => {
       if (!snapshot.empty) {
         setProducts(snapshot.docs.map(doc => ({ firebaseId: doc.id, ...doc.data() })));
@@ -43,25 +124,36 @@ export default function POS() {
       }
     }, (err) => console.error(err));
     return () => unsub();
-  }, []);
+  }, [user]);
 
-  // Sync Shift Logs for Employee History
+  // Sync Kasbon List
   useEffect(() => {
     if (!user) return;
-    const today = new Date();
-    today.setHours(0,0,0,0);
-    const q = query(collection(db, 'transactions'), where('shift', '==', shift));
+    const q = query(collection(db, 'transactions'), where('kasbonStatus', '==', 'belum_lunas'));
+    const unsub = onSnapshot(q, (snap) => {
+      setKasbonList(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0)));
+    });
+    return () => unsub();
+  }, [user]);
+
+  // Sync transactions based on dynamic Range (Date & Time)
+  useEffect(() => {
+    if (!user) return;
+    
+    const start = new Date(`${startDate}T${startTime}`);
+    const end = new Date(`${endDate}T${endTime}`);
+    const q = query(
+      collection(db, 'transactions'), 
+      where('timestamp', '>=', start),
+      where('timestamp', '<=', end)
+    );
     
     const unsub = onSnapshot(q, (snap) => {
       const data = snap.docs.map(d => ({ ...d.data(), id: d.id }));
-      const filtered = data.filter(t => {
-        const tDate = t.timestamp ? new Date(t.timestamp.seconds * 1000) : new Date();
-        return tDate >= today;
-      });
-      setShiftLogs(filtered.sort((a,b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0)));
+      setShiftLogs(data.sort((a,b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0)));
     });
     return () => unsub();
-  }, [user, shift]);
+  }, [user, startDate, startTime, endDate, endTime]);
 
   const handleRequestCancellation = async (log) => {
     const reason = window.prompt("Alasan pembatalan:");
@@ -83,10 +175,52 @@ export default function POS() {
     }
   };
 
-  const filteredProducts = (activeCategory === 'Semua' 
-    ? products 
-    : products.filter(p => p.category === activeCategory))
-    .filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase()));
+  const handlePelunasan = async (kasbon) => {
+    if (!window.confirm(`Terima pelunasan Kasbon Tunai (Laci) Rp ${kasbon.total?.toLocaleString()} dari Bpk/Ibu ${kasbon.kasbonName || 'Konsumen'}?`)) return;
+    
+    try {
+      const batch = writeBatch(db);
+      
+      // Update local cash
+      batch.update(doc(db, 'balances', 'current'), { cash: increment(kasbon.total) });
+      
+      // Log pelunasan
+      batch.set(doc(collection(db, 'transactions')), {
+        type: 'pelunasan_kasbon',
+        status: 'success',
+        user: user.name,
+        shift,
+        total: kasbon.total,
+        timestamp: serverTimestamp(),
+        kasbonLunasId: kasbon.id,
+        items: [{
+          name: `Pelunasan Piutang: ${kasbon.kasbonName}`,
+          action: 'pelunasan_kasbon',
+          qty: 1,
+          price: kasbon.total,
+          total: kasbon.total,
+        }],
+        profit: 0
+      });
+
+      // Update old transaction
+      batch.update(doc(db, 'transactions', kasbon.id), { kasbonStatus: 'lunas', pelunasanShift: shift, pelunasanUser: user.name, dipelunasiPada: serverTimestamp() });
+
+      await batch.commit();
+      alert("Pelunasan berhasil diproses!");
+      if (kasbonList.length === 1) setKasbonModalOpen(false);
+    } catch (e) {
+      alert("Error: " + e.message);
+    }
+  };
+
+  const filteredProducts = products
+    .filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase()))
+    .sort((a, b) => {
+      if (a.type < b.type) return -1;
+      if (a.type > b.type) return 1;
+      return a.name.localeCompare(b.name);
+    });
 
   const totalCart = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
 
@@ -122,31 +256,30 @@ export default function POS() {
     setJasaModal(null);
   };
 
-  const handleRestock = async (e) => {
+  const handleGlobalRestock = async (e) => {
     e.preventDefault();
-    if (!restockModal || !restockForm.qty || !restockForm.totalCost) return;
+    const { productId, qty, totalCost } = globalRestockForm;
+    if (!productId || !qty || !totalCost) return;
 
-    const qty = parseInt(restockForm.qty);
-    const cost = parseFloat(restockForm.totalCost);
+    const product = products.find(p => p.firebaseId === productId);
+    if (!product) return;
+
+    const qtyNum = parseInt(qty);
+    const cost = parseFloat(totalCost);
 
     if (cost > (balances.cash || 0)) {
-       return alert("Gagal: Kas tidak mencukupi untuk belanja stok ini!");
+       return alert("Gagal: Kas tidak mencukupi!");
     }
 
     try {
       const batch = writeBatch(db);
-      const productRef = doc(db, 'products', restockModal.firebaseId);
-      batch.update(productRef, {
-        stock: (restockModal.stock || 0) + qty
-      });
 
-      const balanceRef = doc(db, 'balances', 'current');
-      batch.update(balanceRef, {
-        cash: (balances.cash || 0) - cost
-      });
+      // Atomic stock & balance update
+      batch.update(doc(db, 'products', productId), { stock: increment(qtyNum) });
+      batch.update(doc(db, 'balances', 'current'), { cash: increment(-cost) });
 
-      const transRef = doc(collection(db, 'transactions'));
-      batch.set(transRef, {
+      // Log Transaction
+      batch.set(doc(collection(db, 'transactions')), {
         type: 'expenditure',
         status: 'success',
         user: user.name,
@@ -154,94 +287,120 @@ export default function POS() {
         total: cost,
         timestamp: serverTimestamp(),
         items: [{
-          name: `Belanja: ${restockModal.name}`,
-          qty,
-          price: cost / qty,
+          name: `Restock: ${product.name}`,
+          qty: qtyNum,
+          price: cost / qtyNum,
           total: cost,
-          action: 'restock'
+          action: 'restock',
+          firebaseId: productId,
+          type: 'stok'
         }],
-        profit: -cost 
+        profit: -cost
       });
 
       await batch.commit();
-      alert(`Berhasil restock ${qty} ${restockModal.name}!`);
-      setRestockModal(null);
-      setRestockForm({ qty: '', totalCost: '' });
+      alert(`Berhasil restock ${qtyNum} ${product.name}!`);
+      setGlobalRestockModal(false);
+      setGlobalRestockForm({ productId: '', qty: '', totalCost: '' });
+    } catch (e) {
+      alert("Error: " + e.message);
+    }
+  };
+
+  const submitBelanja = async (e) => {
+    e.preventDefault();
+    if (!belanjaForm.total || isNaN(belanjaForm.total)) return;
+    const cost = parseFloat(belanjaForm.total);
+
+    if (cost > (balances.cash || 0)) {
+       return alert("Gagal: Kas tidak mencukupi!");
+    }
+
+    try {
+      const batch = writeBatch(db);
+
+      // Atomic balance update
+      batch.update(doc(db, 'balances', 'current'), { cash: increment(-cost) });
+
+      batch.set(doc(collection(db, 'transactions')), {
+        type: 'expenditure',
+        status: 'success',
+        user: user.name,
+        shift,
+        total: cost,
+        timestamp: serverTimestamp(),
+        items: [{
+          name: belanjaForm.name,
+          qty: 1,
+          price: cost,
+          total: cost,
+          action: 'belanja'
+        }],
+        profit: -cost
+      });
+
+      await batch.commit();
+      alert(`Berhasil mencatat ${belanjaForm.name} sebesar Rp ${cost.toLocaleString()}!`);
+      setBelanjaModal(false);
+      setBelanjaForm({ name: '', total: '' });
     } catch (e) {
       alert("Error: " + e.message);
     }
   };
 
   const handleCheckout = async () => {
-    if(cart.length === 0) return;
+    if (cart.length === 0) return;
     try {
+      // Hitung profit & delta saldo menggunakan helper
+      const totalProfit = cart.reduce((sum, it) => sum + getItemProfit(it), 0);
+      
+      // Delta saldo dihitung untuk semua metode, helper getItemBalanceDeltas
+      // sudah menangani logika khusus jika metode kasbon (pendapatan 0 tapi modal tetap keluar).
+      let deltas = cart.reduce((acc, item) => {
+        const d = getItemBalanceDeltas(item, paymentMethod);
+        return { cash: acc.cash + d.cash, seabank: acc.seabank + d.seabank, apk: acc.apk + d.apk };
+      }, { cash: 0, seabank: 0, apk: 0 });
+
       const transactionData = {
-        items: cart.map(it => ({ ...it, total: (it.price * (it.qty || 1)) })),
+        items: cart.map(it => ({ ...it, total: it.price * (it.qty || 1) })),
         total: totalCart,
-        profit: cart.reduce((sum, it) => {
-          const q = it.qty || 1;
-          if (it.action === 'tarik') return sum + ((it.fee || 0) * q);
-          const cost = Number(it.costPrice) || 0;
-          const itemsProfit = cost > 0 ? (it.price - cost) * q : 0;
-          return sum + itemsProfit;
-        }, 0),
+        profit: totalProfit,
         timestamp: serverTimestamp(),
-        shift: shift || 'Unknown',
-        user: user?.name || 'Unknown User',
+        shift: shift || '',
+        user: user?.name || '',
+        paymentMethod,
+        kasbonName: paymentMethod === 'kasbon' ? kasbonName : null,
+        kasbonStatus: paymentMethod === 'kasbon' ? 'belum_lunas' : null,
         status: 'success'
       };
-      
+
       const batch = writeBatch(db);
-      const transRef = doc(collection(db, 'transactions'));
-      batch.set(transRef, transactionData);
-      
-      const balanceRef = doc(db, 'balances', 'current');
-      
-      let newApk = balances.apk || 0;
-      let newSeabank = balances.seabank || 0;
-      let newCash = balances.cash || 0;
+      batch.set(doc(collection(db, 'transactions')), transactionData);
 
+      // Atomic balance update — aman dari race condition
+      batch.update(doc(db, 'balances', 'current'), {
+        cash: increment(deltas.cash),
+        seabank: increment(deltas.seabank),
+        apk: increment(deltas.apk),
+      });
+
+      // Atomic stock decrement per item stok
       cart.forEach(item => {
-        const q = item.qty || 1;
-        const totalFee = (item.fee || 0) * q;
-        const totalNominal = (item.nominal || 0) * q;
-
-        if (item.action === 'tarik') {
-           // Jika Arik Tunai: 
-           // 1. Kas Keluar (Nominal yang ditarik)
-           // 2. TAPI Jika Fee dibayar Cash, maka Kas masuk (Fee)
-           const cashEffect = totalNominal - (item.feePaidVia === 'cash' ? totalFee : 0);
-           newCash -= cashEffect;
-        } else {
-           // Selain Tarik (Top Up dll): Pelanggan kasih CASH seluas 'price' (nominal + fee)
-           newCash += (item.price * q);
-        }
-
-        if (item.type === 'jasa' || item.type === 'saldo') {
-          if (item.action === 'transfer') {
-            newSeabank -= (item.costPrice * q); 
-          } else if (item.action === 'tarik') {
-            // Jika Tarik Tunai: Uang masuk ke Bank sesuai nominal + fee (jika via transfer)
-            const bankReceived = totalNominal + (item.feePaidVia === 'transfer' ? totalFee : 0);
-            newSeabank += bankReceived;
-          } else {
-            newApk -= (item.costPrice * q); 
-          }
-        }
-
         if (item.type === 'stok' && item.firebaseId) {
-          const productRef = doc(db, 'products', item.firebaseId);
-          batch.update(productRef, { stock: (item.stock || 0) - q });
+          batch.update(doc(db, 'products', item.firebaseId), {
+            stock: increment(-(item.qty || 1)),
+          });
         }
       });
 
-      batch.update(balanceRef, { apk: newApk, seabank: newSeabank, cash: newCash });
       await batch.commit();
 
-      alert(`Pembayaran Berhasil! \nSaldo Terpotong Otomatis.`);
+      alert(`Pembayaran Berhasil! \nMetode: ${paymentMethod === 'transfer' ? 'Transfer Bank' : paymentMethod === 'kasbon' ? 'Kasbon/Hutang' : 'Tunai'}.`);
       clearCart();
       setCartOpen(false);
       setShowConfirm(false);
+      setPaymentMethod('cash');
+      setKasbonName('');
     } catch (e) {
       console.error(e);
       alert("Gagal menyimpan transaksi.");
@@ -257,7 +416,7 @@ export default function POS() {
          <div className="flex items-center gap-2 text-xs font-bold text-slate-400">
             <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-100 rounded-md">
                <Clock size={12} className="text-blue-500" />
-               <span>Shift {shift}</span>
+               <span>{shift}</span>
             </div>
             <span>•</span>
             <span className="text-slate-300 italic">User: {user?.name}</span>
@@ -269,37 +428,56 @@ export default function POS() {
         <div className="flex gap-3 overflow-x-auto no-scrollbar scroll-smooth">
           <div className="flex items-center gap-3 bg-white px-4 py-2.5 rounded-2xl shadow-sm border border-slate-100 shrink-0">
              <div className="w-2.5 h-2.5 rounded-full bg-orange-400 shadow-[0_0_10px_rgba(251,146,60,0.4)]"></div>
-             <div>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5 leading-none">Kas</p>
-                <p className="text-sm font-black text-slate-900 leading-none">Rp {(balances.cash || 0).toLocaleString()}</p>
-             </div>
-          </div>
-          <div className="flex items-center gap-3 bg-white px-4 py-2.5 rounded-2xl shadow-sm border border-slate-100 shrink-0">
-             <div className="w-2.5 h-2.5 rounded-full bg-blue-400 shadow-[0_0_10px_rgba(96,165,250,0.4)]"></div>
-             <div>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5 leading-none">APK</p>
-                <p className="text-sm font-black text-slate-900 leading-none">Rp {balances.apk.toLocaleString()}</p>
-             </div>
-          </div>
-          <div className="flex items-center gap-3 bg-white px-4 py-2.5 rounded-2xl shadow-sm border border-slate-100 shrink-0">
-             <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.4)]"></div>
-             <div>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5 leading-none">Bank</p>
-                <p className="text-sm font-black text-slate-900 leading-none">Rp {balances.seabank.toLocaleString()}</p>
-             </div>
+              <div>
+                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5 leading-none">Kas</p>
+                 <div className="text-sm font-black text-slate-900 leading-none">
+                   {balanceLoading ? <span className="animate-pulse text-slate-300">...</span> : `Rp ${(balances.cash || 0).toLocaleString()}`}
+                 </div>
+              </div>
+           </div>
+           <div className="flex items-center gap-3 bg-white px-4 py-2.5 rounded-2xl shadow-sm border border-slate-100 shrink-0">
+              <div className="w-2.5 h-2.5 rounded-full bg-blue-400 shadow-[0_0_10px_rgba(96,165,250,0.4)]"></div>
+              <div>
+                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5 leading-none">APK</p>
+                 <div className="text-sm font-black text-slate-900 leading-none">
+                   {balanceLoading ? <span className="animate-pulse text-slate-300">...</span> : `Rp ${balances.apk.toLocaleString()}`}
+                 </div>
+              </div>
+           </div>
+           <div className="flex items-center gap-3 bg-white px-4 py-2.5 rounded-2xl shadow-sm border border-slate-100 shrink-0">
+              <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.4)]"></div>
+              <div>
+                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5 leading-none">Bank</p>
+                 <div className="text-sm font-black text-slate-900 leading-none">
+                   {balanceLoading ? <span className="animate-pulse text-slate-300">...</span> : `Rp ${balances.seabank.toLocaleString()}`}
+                 </div>
+              </div>
           </div>
         </div>
-        <button 
-           onClick={() => setHistoryOpen(true)}
-           className="w-12 h-12 flex items-center justify-center bg-white rounded-2xl text-slate-600 shadow-sm border border-slate-100 hover:text-blue-600 active:scale-90 transition-all relative shrink-0"
-        >
-          <History size={20} />
-          {shiftLogs.length > 0 && (
-             <span className="absolute -top-1 -right-1 bg-blue-600 text-white w-5 h-5 rounded-full border-2 border-slate-50 text-[9px] font-black flex items-center justify-center">
-               {shiftLogs.length}
-             </span>
-          )}
-        </button>
+        <div className="flex gap-2 shrink-0">
+          <button 
+             onClick={() => setKasbonModalOpen(true)}
+             className="w-12 h-12 flex items-center justify-center bg-white rounded-2xl text-amber-600 shadow-sm border border-slate-100 hover:text-amber-700 active:scale-90 transition-all relative shrink-0"
+          >
+            <ClipboardList size={20} />
+            {kasbonList.length > 0 && (
+               <span className="absolute -top-1 -right-1 bg-red-500 text-white w-5 h-5 rounded-full border-2 border-slate-50 text-[9px] font-black flex items-center justify-center">
+                 {kasbonList.length}
+               </span>
+            )}
+          </button>
+          <button 
+             onClick={() => setHistoryOpen(true)}
+             className="w-12 h-12 flex items-center justify-center bg-white rounded-2xl text-slate-600 shadow-sm border border-slate-100 hover:text-blue-600 active:scale-90 transition-all relative shrink-0"
+          >
+            <History size={20} />
+            {shiftLogs.length > 0 && (
+               <span className="absolute -top-1 -right-1 bg-blue-600 text-white w-5 h-5 rounded-full border-2 border-slate-50 text-[9px] font-black flex items-center justify-center">
+                 {shiftLogs.length}
+               </span>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Search Bar */}
@@ -321,31 +499,68 @@ export default function POS() {
          </div>
       </div>
 
-      {/* Categories Horizontal Scroll */}
-      <div className="bg-white border-b px-6 py-3 overflow-x-auto whitespace-nowrap sticky top-0 z-40 shadow-sm flex gap-3 no-scrollbar">
-        {categories.map(cat => (
-          <button
-            key={cat}
-            onClick={() => setActiveCategory(cat)}
-            className={`px-6 py-2.5 rounded-2xl text-xs font-black uppercase tracking-widest transition-all ${
-              activeCategory === cat ? 'bg-slate-900 text-white shadow-lg' : 'bg-white text-slate-500 hover:bg-slate-50 border border-slate-100'
-            }`}
-          >
-            {cat}
-          </button>
-        ))}
-      </div>
+
 
       <div className="p-6 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6 flex-1 overflow-y-auto w-full max-w-7xl mx-auto">
-        {filteredProducts.map(product => {
-          const outOfStock = product.type === 'stok' && product.stock <= 0;
-          return (
+         {/* Special Expenditure Card: Stok Masuk */}
+         {searchQuery === '' && (
+           <motion.div
+             layout
+             onClick={() => setGlobalRestockModal(true)}
+             className="group relative p-5 rounded-[2rem] flex flex-col justify-between bg-blue-50 border border-blue-100 shadow-sm hover:shadow-xl hover:shadow-blue-200/50 transition-all duration-300 h-52 overflow-hidden cursor-pointer"
+           >
+             <div className="absolute -right-6 -top-6 w-20 h-20 bg-blue-500 rounded-full opacity-10 group-hover:opacity-20 transition-opacity flex items-center justify-center pt-6 pl-6">
+                <Plus size={32} className="text-blue-600"/>
+             </div>
+             <div className="z-10 w-full">
+                <span className="text-[9px] uppercase font-black tracking-[0.15em] px-2.5 py-1 rounded-lg bg-blue-100 text-blue-600 mb-2 inline-block">
+                  INPUT STOK
+                </span>
+                <h3 className="font-black text-slate-800 text-base leading-tight group-hover:text-blue-600 transition-colors">
+                   Input Stok Masuk
+                </h3>
+                <p className="text-[10px] text-slate-400 font-bold mt-1 uppercase tracking-tight">Barang Fisik (Galon, Rokok, dll)</p>
+             </div>
+             <div className="z-10 mt-4">
+                <button className="w-full bg-blue-600 text-white text-xs font-black py-3 rounded-xl hover:bg-blue-700 active:scale-95 transition-all shadow-md uppercase tracking-wider">
+                   Pilih Barang
+                </button>
+             </div>
+           </motion.div>
+         )}
+
+         {/* Special Expenditure Card: Belanja Voucher */}
+         {searchQuery === '' && (
+           <motion.div
+             layout
+             onClick={() => setBelanjaModal(true)}
+             className="group relative p-5 rounded-[2rem] flex flex-col justify-between bg-orange-50 border border-orange-100 shadow-sm hover:shadow-xl hover:shadow-orange-200/50 transition-all duration-300 h-52 overflow-hidden cursor-pointer"
+           >
+             <div className="absolute -right-6 -top-6 w-20 h-20 bg-orange-500 rounded-full opacity-10 group-hover:opacity-20 transition-opacity flex items-center justify-center pt-6 pl-6">
+                <ShoppingBag size={32} className="text-orange-600"/>
+             </div>
+             <div className="z-10 w-full">
+                <span className="text-[9px] uppercase font-black tracking-[0.15em] px-2.5 py-1 rounded-lg bg-orange-100 text-orange-600 mb-2 inline-block">
+                  BELANJA VOUCHER
+                </span>
+                <h3 className="font-black text-slate-800 text-base leading-tight group-hover:text-orange-600 transition-colors">
+                   Input Stok Voucher
+                </h3>
+                <p className="text-[10px] text-slate-400 font-bold mt-1 uppercase tracking-tight">Potong Kas Fisik</p>
+             </div>
+             <div className="z-10 mt-4">
+                <button className="w-full bg-orange-600 text-white text-xs font-black py-3 rounded-xl hover:bg-orange-700 active:scale-95 transition-all shadow-md uppercase tracking-wider">
+                   Input Biaya
+                </button>
+             </div>
+           </motion.div>
+         )}
+
+        {filteredProducts.map(product => (
             <motion.div
               layout
               key={product.id || product.firebaseId}
-              className={`group relative p-5 rounded-[2rem] flex flex-col justify-between bg-white border border-slate-100 shadow-sm hover:shadow-xl hover:shadow-slate-200/50 hover:border-blue-100 transition-all duration-300 h-52 overflow-hidden ${
-                outOfStock ? 'opacity-60 grayscale' : ''
-              }`}
+              className="group relative p-5 rounded-[2rem] flex flex-col justify-between bg-white border border-slate-100 shadow-sm hover:shadow-xl hover:shadow-slate-200/50 hover:border-blue-100 transition-all duration-300 h-52 overflow-hidden"
             >
               {['jasa', 'saldo'].includes(product.type) && (
                 <div className="absolute -right-6 -top-6 w-20 h-20 bg-blue-500 rounded-full opacity-10 group-hover:opacity-20 transition-opacity flex items-center justify-center pt-6 pl-6">
@@ -356,16 +571,10 @@ export default function POS() {
               <div className="z-10 w-full">
                 <div className="flex justify-between items-start mb-3">
                    <span className={`text-[9px] uppercase font-black tracking-[0.15em] px-2.5 py-1 rounded-lg ${
-                     product.type === 'stok' ? 'bg-emerald-50 text-emerald-600' :
                      product.type === 'jasa' ? 'bg-blue-50 text-blue-600' : 'bg-purple-50 text-purple-600'
                    }`}>
                      {product.type}
                    </span>
-                   {product.type === 'stok' && (
-                      <span className={`text-[10px] font-black ${product.stock <= 3 ? 'text-red-500' : 'text-slate-400'}`}>
-                         Stok: {product.stock}
-                      </span>
-                   )}
                 </div>
                 <h3 className="font-black text-slate-800 text-sm sm:text-base leading-tight group-hover:text-blue-600 transition-colors">
                   {product.name}
@@ -383,26 +592,15 @@ export default function POS() {
                 
                 <div className="flex gap-2">
                    <button 
-                     disabled={outOfStock}
-                     onClick={() => !outOfStock && handleProductClick(product)}
-                     className="flex-1 bg-slate-900 text-white text-xs font-black py-3 rounded-xl hover:bg-blue-600 active:scale-95 transition-all shadow-md active:shadow-none uppercase tracking-wider"
+                     onClick={() => handleProductClick(product)}
+                     className="w-full bg-slate-900 text-white text-xs font-black py-3 rounded-xl hover:bg-blue-600 active:scale-95 transition-all shadow-md active:shadow-none uppercase tracking-wider"
                    >
-                     {outOfStock ? 'Habis' : 'Pilih'}
+                     Pilih / Jual
                    </button>
-                   {product.type === 'stok' && (
-                     <button 
-                       onClick={(e) => { e.stopPropagation(); setRestockModal(product); }}
-                       className="w-10 bg-amber-50 text-amber-600 border border-amber-100 flex items-center justify-center rounded-xl hover:bg-amber-500 hover:text-white transition-all shadow-sm active:shadow-none"
-                       title="Restock Barang"
-                     >
-                       <Plus size={18} strokeWidth={3} />
-                     </button>
-                   )}
                 </div>
               </div>
             </motion.div>
-          )
-        })}
+          ))}
       </div>
 
       {/* Bottom Cart Bar */}
@@ -465,10 +663,68 @@ export default function POS() {
                  <div className="flex justify-between items-center opacity-70 text-xs font-bold mb-1 uppercase tracking-widest">Total Tagihan</div>
                  <div className="text-3xl font-black italic tracking-tight">Rp {totalCart.toLocaleString()}</div>
                </div>
-               <div className="grid grid-cols-2 gap-3">
-                  <button onClick={() => setShowConfirm(false)} className="py-4 rounded-2xl font-bold text-slate-500 bg-slate-100 active:scale-95 transition-all">Batal</button>
-                  <button onClick={handleCheckout} className="py-4 rounded-2xl font-bold text-white bg-blue-600 active:scale-95 transition-all shadow-lg shadow-blue-500/20">Proses</button>
-               </div>
+               {/* Payment Method Toggle */}
+               <div className="mb-5">
+                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-center mb-3">Metode Pembayaran</p>
+                 <div className="flex gap-2">
+                   <button
+                     type="button"
+                     onClick={() => setPaymentMethod('cash')}
+                     className={`flex-1 py-3 rounded-2xl text-sm font-black border transition-all ${
+                       paymentMethod === 'cash'
+                         ? 'bg-slate-900 text-white border-slate-900 shadow-lg'
+                         : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+                     }`}
+                   >
+                     💵 Tunai
+                   </button>
+                   <button
+                     type="button"
+                     onClick={() => setPaymentMethod('transfer')}
+                     className={`flex-1 py-3 rounded-2xl text-sm font-black border transition-all ${
+                       paymentMethod === 'transfer'
+                         ? 'bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-500/30'
+                         : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+                     }`}
+                   >
+                     🏦 Transfer
+                   </button>
+                     <button
+                       type="button"
+                       onClick={() => setPaymentMethod('kasbon')}
+                       className={`flex-1 py-3 rounded-2xl text-sm font-black border transition-all ${
+                         paymentMethod === 'kasbon'
+                           ? 'bg-amber-500 text-white border-amber-500 shadow-lg shadow-amber-500/30'
+                           : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+                       }`}
+                     >
+                       📝 Kasbon
+                     </button>
+                   </div>
+                   {paymentMethod === 'transfer' && (
+                     <p className="text-[11px] text-blue-500 font-bold text-center mt-2">Saldo Seabank akan bertambah</p>
+                   )}
+                   {paymentMethod === 'kasbon' && (
+                     <div className="mt-4 animate-in fade-in slide-in-from-top-2">
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-center block mb-2">Nama Penghutang</label>
+                        <input 
+                           type="text" 
+                           required 
+                           autoFocus
+                           className="w-full px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 font-bold placeholder-amber-300 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
+                           placeholder="Masukkan nama konsumen..."
+                           value={kasbonName}
+                           onChange={e => setKasbonName(e.target.value)}
+                        />
+                     </div>
+                   )}
+                 </div>
+                 <div className="grid grid-cols-2 gap-3">
+                    <button onClick={() => setShowConfirm(false)} className="py-4 rounded-2xl font-bold text-slate-500 bg-slate-100 active:scale-95 transition-all">Batal</button>
+                    <button onClick={handleCheckout} disabled={paymentMethod === 'kasbon' && !kasbonName} className={`py-4 rounded-2xl font-bold text-white active:scale-95 transition-all shadow-lg disabled:opacity-50 ${
+                      paymentMethod === 'transfer' ? 'bg-blue-600 shadow-blue-500/20' : paymentMethod === 'kasbon' ? 'bg-amber-500 shadow-amber-500/20' : 'bg-slate-900 shadow-slate-900/20'
+                    }`}>Proses</button>
+                 </div>
             </motion.div>
           </div>
         )}
@@ -540,38 +796,83 @@ export default function POS() {
         )}
       </AnimatePresence>
 
-      {/* Restock Modal */}
-      <AnimatePresence>
-        {restockModal && (
-          <div className="fixed inset-0 bg-slate-900/60 z-[70] flex flex-col justify-end">
-             <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} className="bg-white p-6 rounded-t-3xl shadow-2xl safe-area-bottom">
-                <div className="flex justify-between items-center mb-6">
-                   <h3 className="text-xl font-black text-slate-900">Belanja Stok: {restockModal.name}</h3>
-                   <button onClick={() => setRestockModal(null)} className="p-2 bg-slate-100 rounded-full"><X size={20}/></button>
-                </div>
-                <form onSubmit={handleRestock} className="space-y-4 pb-4">
-                   <div className="grid grid-cols-2 gap-4">
-                      <div>
-                         <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Jumlah Masuk</label>
-                         <input type="number" required placeholder="Qty" className="w-full px-4 py-3 bg-slate-50 border rounded-xl font-bold" value={restockForm.qty} onChange={e => setRestockForm({...restockForm, qty: e.target.value})} />
-                      </div>
-                      <div>
-                         <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Total Biaya (Keluar Kas)</label>
-                         <input type="number" required placeholder="Rp Total" className="w-full px-4 py-3 bg-slate-50 border rounded-xl font-bold" value={restockForm.totalCost} onChange={e => setRestockForm({...restockForm, totalCost: e.target.value})} />
-                      </div>
-                   </div>
-                   <div className="bg-red-50 p-4 rounded-xl text-red-600 text-xs font-bold flex items-start gap-2">
-                      <AlertOctagon size={18} className="shrink-0" />
-                      <p>Perhatian: Aksi ini akan memotong saldo Kas Global sebesar Rp {(parseFloat(restockForm.totalCost) || 0).toLocaleString()} dan menambah stok barang.</p>
-                   </div>
-                   <button type="submit" className="w-full bg-slate-900 text-white font-black py-4 rounded-xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2">
-                     <ShoppingBag size={20} /> Konfirmasi Belanja
-                   </button>
-                </form>
-             </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+       {/* Global Restock Modal */}
+       <AnimatePresence>
+         {globalRestockModal && (
+           <div className="fixed inset-0 bg-slate-900/60 z-[75] flex flex-col justify-end">
+              <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} className="bg-white p-6 rounded-t-3xl shadow-2xl safe-area-bottom">
+                 <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-xl font-black text-slate-900">Input Stok Masuk</h3>
+                    <button onClick={() => setGlobalRestockModal(false)} className="p-2 bg-slate-100 rounded-full"><X size={20}/></button>
+                 </div>
+                 <form onSubmit={handleGlobalRestock} className="space-y-4 pb-4">
+                    <div>
+                       <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Pilih Barang</label>
+                       <select 
+                         required 
+                         className="w-full px-4 py-3 bg-slate-50 border rounded-xl font-bold"
+                         value={globalRestockForm.productId}
+                         onChange={e => setGlobalRestockForm({...globalRestockForm, productId: e.target.value})}
+                       >
+                         <option value="">-- Pilih Produk --</option>
+                         {products.filter(p => p.type === 'stok').map(p => (
+                           <option key={p.firebaseId} value={p.firebaseId}>{p.name} (Stok: {p.stock})</option>
+                         ))}
+                       </select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                       <div>
+                          <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Jumlah Masuk</label>
+                          <input type="number" required placeholder="Qty" className="w-full px-4 py-3 bg-slate-50 border rounded-xl font-bold" value={globalRestockForm.qty} onChange={e => setGlobalRestockForm({...globalRestockForm, qty: e.target.value})} />
+                       </div>
+                       <div>
+                          <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Total Biaya (Keluar Kas)</label>
+                          <input type="number" required placeholder="Rp Total" className="w-full px-4 py-3 bg-slate-50 border rounded-xl font-bold" value={globalRestockForm.totalCost} onChange={e => setGlobalRestockForm({...globalRestockForm, totalCost: e.target.value})} />
+                       </div>
+                    </div>
+                    <div className="bg-blue-50 p-4 rounded-xl text-blue-600 text-xs font-bold flex items-start gap-2">
+                       <AlertOctagon size={18} className="shrink-0" />
+                       <p>Perhatian: Aksi ini akan memotong saldo Kas Fisik dan menambah stok sistem.</p>
+                    </div>
+                    <button type="submit" className="w-full bg-blue-600 text-white font-black py-4 rounded-xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2">
+                       <Plus size={20} /> Konfirmasi Stok Masuk
+                    </button>
+                 </form>
+              </motion.div>
+           </div>
+         )}
+       </AnimatePresence>
+
+       {/* Belanja Voucher Modal */}
+       <AnimatePresence>
+         {belanjaModal && (
+           <div className="fixed inset-0 bg-slate-900/60 z-[70] flex flex-col justify-end">
+              <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} className="bg-white p-6 rounded-t-3xl shadow-2xl safe-area-bottom">
+                 <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-xl font-black text-slate-900">Catat Belanja Voucher</h3>
+                    <button onClick={() => setBelanjaModal(false)} className="p-2 bg-slate-100 rounded-full"><X size={20}/></button>
+                 </div>
+                 <form onSubmit={submitBelanja} className="space-y-4 pb-4">
+                    <div>
+                       <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Keterangan Belanja</label>
+                       <input type="text" required className="w-full px-4 py-3 bg-slate-50 border rounded-xl font-bold" value={belanjaForm.name} onChange={e => setBelanjaForm({...belanjaForm, name: e.target.value})} />
+                    </div>
+                    <div>
+                       <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Total Biaya (Keluar Kas Fisik)</label>
+                       <input type="number" required placeholder="Rp Total" autoFocus className="w-full px-4 py-3 bg-slate-50 border rounded-xl font-bold text-lg" value={belanjaForm.total} onChange={e => setBelanjaForm({...belanjaForm, total: e.target.value})} />
+                    </div>
+                    <div className="bg-orange-50 p-4 rounded-xl text-orange-600 text-xs font-bold flex items-start gap-2">
+                       <AlertOctagon size={18} className="shrink-0" />
+                       <p>Perhatian: Aksi ini akan langsung memotong saldo Kas Fisik global.</p>
+                    </div>
+                     <button type="submit" className="w-full bg-orange-600 text-white font-black py-4 rounded-xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2">
+                       <FileCheck2 size={20} /> Simpan Pengeluaran
+                    </button>
+                 </form>
+              </motion.div>
+           </div>
+         )}
+       </AnimatePresence>
 
       {/* Jasa Input Modal */}
       <AnimatePresence>
@@ -628,23 +929,66 @@ export default function POS() {
           <>
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setHistoryOpen(false)} className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[70]" />
             <motion.div initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} className="fixed top-0 right-0 h-full w-full max-w-sm bg-slate-50 z-[80] shadow-2xl flex flex-col">
-               <div className="p-6 bg-white border-b flex justify-between items-center shrink-0">
-                  <div className="flex items-center gap-2">
-                     <History size={20} className="text-blue-600" />
-                     <h3 className="font-extrabold text-slate-800 tracking-tight">Riwayat Shift Anda</h3>
+               <div className="p-6 bg-white border-b flex flex-col gap-4 shrink-0">
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                       <History size={20} className="text-blue-600" />
+                       <h3 className="font-extrabold text-slate-800 tracking-tight">Riwayat Sesi Anda</h3>
+                    </div>
+                     <button onClick={() => setHistoryOpen(false)} className="p-2 hover:bg-slate-100 rounded-full"><X size={24} /></button>
                   </div>
-                  <button onClick={() => setHistoryOpen(false)} className="p-2 hover:bg-slate-100 rounded-full"><X size={24} /></button>
+
+                   {/* Range Inputs */}
+                   <div className="space-y-2 animate-in fade-in slide-in-from-top-2 duration-300">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="bg-slate-50 p-2 rounded-xl border border-slate-100">
+                          <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Dari</p>
+                          <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} className="w-full text-[10px] font-bold bg-transparent outline-none" />
+                          <input type="time" value={startTime} onChange={e=>setStartTime(e.target.value)} className="w-full text-[10px] font-bold bg-transparent outline-none border-t border-slate-100 mt-1 pt-1" />
+                        </div>
+                        <div className="bg-slate-50 p-2 rounded-xl border border-slate-100">
+                          <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Sampai</p>
+                          <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="w-full text-[10px] font-bold bg-transparent outline-none" />
+                          <input type="time" value={endTime} onChange={e=>setEndTime(e.target.value)} className="w-full text-[10px] font-bold bg-transparent outline-none border-t border-slate-100 mt-1 pt-1" />
+                        </div>
+                      </div>
+                    </div>
+
+                  <div className="relative">
+                    <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input 
+                      type="text" 
+                      placeholder="Cari transaksi..." 
+                      value={logSearchQuery}
+                      onChange={(e) => setLogSearchQuery(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 transition-all font-medium"
+                    />
+                  </div>
                </div>
                <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                  {shiftLogs.length === 0 ? (
-                    <div className="text-center py-20 text-slate-400 text-xs italic">Belum ada transaksi di shift ini.</div>
+                  {shiftLogs.filter(log => {
+                    if(!logSearchQuery) return true;
+                    const searchLower = logSearchQuery.toLowerCase();
+                    const itemMatch = log.items?.some(it => it.name.toLowerCase().includes(searchLower) || (typeof it.action === 'string' && it.action.toLowerCase().includes(searchLower)));
+                    const userMatch = log.user?.toLowerCase().includes(searchLower);
+                    const typeMatch = log.type?.toLowerCase().includes(searchLower);
+                    return itemMatch || userMatch || typeMatch;
+                  }).length === 0 ? (
+                    <div className="text-center py-20 text-slate-400 text-xs italic">Tidak ada transaksi ditemukan.</div>
                    ) : (
-                    shiftLogs.map(log => (
+                    shiftLogs.filter(log => {
+                      if(!logSearchQuery) return true;
+                      const searchLower = logSearchQuery.toLowerCase();
+                      const itemMatch = log.items?.some(it => it.name.toLowerCase().includes(searchLower) || (typeof it.action === 'string' && it.action.toLowerCase().includes(searchLower)));
+                      const userMatch = log.user?.toLowerCase().includes(searchLower);
+                      const typeMatch = log.type?.toLowerCase().includes(searchLower);
+                      return itemMatch || userMatch || typeMatch;
+                    }).map(log => (
                       <div key={log.id} className={`bg-white p-4 rounded-2xl border border-slate-100 shadow-sm relative overflow-hidden ${log.status === 'cancelled' ? 'opacity-50 grayscale' : ''}`}>
                          <div className="flex justify-between items-start mb-2">
                             <div className="flex items-center gap-1.5 text-[10px] text-slate-400 font-bold">
                                <Clock size={12} />
-                               {log.timestamp ? new Date(log.timestamp.seconds * 1000).toLocaleTimeString('id-id', { hour: '2-digit', minute: '2-digit'}) : '...'}
+                               {log.timestamp ? new Date(log.timestamp.seconds * 1000).toLocaleString('id-id', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'}) : '...'}
                             </div>
                             <div className="flex gap-2">
                                {log.status === 'cancellation_requested' && (
@@ -694,6 +1038,74 @@ export default function POS() {
                </div>
             </motion.div>
           </>
+        )}
+      </AnimatePresence>
+
+      {/* Kasbon Modal */}
+      <AnimatePresence>
+        {kasbonModalOpen && (
+           <div className="fixed inset-0 z-[80] flex flex-col justify-end">
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setKasbonModalOpen(false)} className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" />
+              <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={{ type: "spring", damping: 25, stiffness: 200 }} className="bg-white rounded-t-[2.5rem] p-6 z-50 flex flex-col h-[85vh] shadow-2xl relative">
+                  <div className="flex justify-between items-center mb-6">
+                     <div className="flex items-center gap-3">
+                        <div className="bg-amber-100 p-3 rounded-2xl">
+                           <ClipboardList size={28} className="text-amber-600" />
+                        </div>
+                        <div>
+                           <h2 className="text-2xl font-black text-slate-900 leading-none">Buku Piutang</h2>
+                           <p className="text-slate-500 font-bold text-sm mt-1">{kasbonList.length} Konsumen Kasbon</p>
+                        </div>
+                     </div>
+                     <button onClick={() => setKasbonModalOpen(false)} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"><X size={24} /></button>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto -mx-4 px-4 space-y-4">
+                     {kasbonList.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center h-48 text-slate-400">
+                           <CheckCircle2 size={48} className="mb-4 text-emerald-300" />
+                           <p className="font-bold text-lg text-slate-500">Mantap, tidak ada piutang!</p>
+                           <p className="text-sm">Semua konsumen sudah melunasi kasbonnya.</p>
+                        </div>
+                     ) : (
+                        kasbonList.map(kasbon => (
+                           <div key={kasbon.id} className="bg-white rounded-2xl p-4 border border-amber-200 shadow-sm hover:shadow-md transition-shadow group relative overflow-hidden">
+                              <div className="absolute top-0 left-0 w-1.5 h-full bg-amber-400" />
+                              <div className="flex flex-col sm:flex-row justify-between gap-4">
+                                 <div>
+                                    <div className="flex items-center gap-2 mb-1">
+                                       <span className="text-lg font-black text-slate-800 uppercase line-clamp-1">{kasbon.kasbonName || 'Tidak Bernama'}</span>
+                                       <span className="bg-amber-100 text-amber-700 text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider">Belum Lunas</span>
+                                    </div>
+                                    <p className="text-xs font-bold text-slate-500 mb-2 border-l-2 border-slate-200 pl-2">
+                                       {kasbon.items?.map(it => `${it.name} (x${it.qty})`).join(', ')}
+                                    </p>
+                                    <div className="flex items-center gap-4 mt-2">
+                                       <div>
+                                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Nominal Hutang</p>
+                                          <p className="text-xl font-black text-red-600 leading-none">Rp {kasbon.total?.toLocaleString()}</p>
+                                       </div>
+                                       <div>
+                                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Tanggal</p>
+                                          <p className="text-xs font-bold text-slate-600">{kasbon.timestamp ? new Date(kasbon.timestamp.seconds * 1000).toLocaleDateString('id-ID', { month: 'short', day: 'numeric', year: 'numeric' }) : '-'}</p>
+                                       </div>
+                                    </div>
+                                 </div>
+                                 <div className="flex items-center sm:w-auto w-full pt-2 sm:pt-0 border-t sm:border-0 border-slate-100 shrink-0">
+                                    <button 
+                                       onClick={() => handlePelunasan(kasbon)} 
+                                       className="w-full sm:w-auto bg-emerald-50 text-emerald-600 border border-emerald-200 font-bold py-3 px-6 rounded-xl text-sm hover:bg-emerald-600 hover:text-white active:scale-95 transition-all flex items-center justify-center gap-2"
+                                    >
+                                       <CheckCircle2 size={18} /> LUNASKAN
+                                    </button>
+                                 </div>
+                              </div>
+                           </div>
+                        ))
+                     )}
+                  </div>
+              </motion.div>
+           </div>
         )}
       </AnimatePresence>
     </div>

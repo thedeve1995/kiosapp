@@ -10,29 +10,9 @@ import { useEffect, useState } from 'react';
 import { auth, db } from './lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
+import { RefreshCw, Sparkles, X } from 'lucide-react';
+import { AnimatePresence, motion } from 'framer-motion';
 
-// Shift detection logic
-const getShiftByTime = () => {
-  const date = new Date();
-  const day = date.getDay(); // 0 is Sunday, 6 is Saturday
-  const time = date.getHours() + date.getMinutes() / 60;
-  
-  if (day === 6) { // Sabtu
-    if (time >= 6.5 && time < 8.5) return "Pagi (06:30 - 08:30)";
-    if (time >= 8.5 && time < 15) return "Siang (08:30 - 15:00)";
-    if (time >= 15 && time < 20) return "Malam (15:00 - 20:00)";
-    return "Tutup";
-  } else if (day === 0) { // Minggu
-    if (time >= 8.5 && time < 14) return "Siang (08:30 - 14:00)";
-    if (time >= 14 && time < 22) return "Malam (14:00 - 22:00)";
-    return "Tutup";
-  } else { // Senin - Jumat
-    if (time >= 6.5 && time < 8.5) return "Pagi (06:30 - 08:30)";
-    if (time >= 8.5 && time < 16.5) return "Siang (08:30 - 16:30)";
-    if (time >= 16.5 && time < 21.5) return "Malam (16:30 - 21:30)";
-    return "Tutup";
-  }
-};
 
 // Simple protection wrapper
 const OwnerOnly = ({ children }) => {
@@ -46,6 +26,30 @@ function App() {
   const setUser = useStore(state => state.setUser);
   const setShift = useStore(state => state.setShift);
   const [loading, setLoading] = useState(true);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+
+  useEffect(() => {
+    const handleUpdate = () => setUpdateAvailable(true);
+    window.addEventListener('swUpdateAvailable', handleUpdate);
+    return () => window.removeEventListener('swUpdateAvailable', handleUpdate);
+  }, []);
+
+  const handleRefresh = () => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(registrations => {
+        registrations.forEach(reg => {
+          if (reg.waiting) {
+            reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+          } else {
+            // Fallback for safety
+            window.location.reload();
+          }
+        });
+      });
+    } else {
+      window.location.reload();
+    }
+  };
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -70,14 +74,13 @@ function App() {
   }, [user, setUser]);
 
   useEffect(() => {
-    // Keep shift updated
-    const shift = getShiftByTime();
-    setShift(shift);
-    const interval = setInterval(() => {
-      setShift(getShiftByTime());
-    }, 60000);
-    return () => clearInterval(interval);
-  }, [setShift]);
+    // Set shift only when user is available, stay static during the session
+    if (user) {
+      setShift(`Sesi ${user.name}`);
+    } else {
+      setShift(null);
+    }
+  }, [user, setShift]);
 
   if (loading) {
     return (
@@ -89,7 +92,43 @@ function App() {
   }
 
   return (
-    <BrowserRouter>
+    <div className="relative">
+      <AnimatePresence>
+        {updateAvailable && (
+          <motion.div 
+            initial={{ y: -100, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -100, opacity: 0 }}
+            className="fixed top-4 left-4 right-4 z-[9999] flex justify-center"
+          >
+            <div className="bg-slate-900/90 backdrop-blur-xl border border-white/20 px-6 py-4 rounded-[2rem] shadow-2xl flex items-center gap-4 max-w-xl text-white">
+              <div className="bg-blue-600 p-2 rounded-full ring-4 ring-blue-500/20">
+                <Sparkles size={20}/>
+              </div>
+              <div className="flex-1">
+                <h4 className="text-sm font-black uppercase tracking-widest italic">Versi Baru Tersedia!</h4>
+                <p className="text-[10px] opacity-70 font-bold">Fitur & perbaikan terbaru sudah siap digunakan.</p>
+              </div>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => setUpdateAvailable(false)}
+                  className="px-4 py-2 text-[10px] uppercase font-black tracking-widest bg-white/5 hover:bg-white/10 rounded-2xl transition-all"
+                >
+                  Nanti Saja
+                </button>
+                <button 
+                  onClick={handleRefresh}
+                  className="px-6 py-2 text-[10px] uppercase font-black tracking-widest bg-blue-600 hover:bg-blue-700 rounded-2xl shadow-lg shadow-blue-500/30 flex items-center gap-2 transition-all"
+                >
+                  <RefreshCw size={14} className="animate-spin-slow" /> Perbarui Sekarang
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <BrowserRouter>
       <Routes>
         <Route path="/login" element={!user ? <Login /> : <Navigate to="/" />} />
         <Route path="/setup-owner" element={<RegisterOwner />} />
@@ -100,7 +139,8 @@ function App() {
           <Route path="/admin" element={<OwnerOnly><AdminDashboard /></OwnerOnly>} />
         </Route>
       </Routes>
-    </BrowserRouter>
+      </BrowserRouter>
+    </div>
   );
 }
 

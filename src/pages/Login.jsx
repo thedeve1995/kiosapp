@@ -68,7 +68,7 @@ export default function Login() {
 
         <div className="relative z-10">
           <h1 className="text-3xl font-extrabold text-slate-900 mb-2">Kios<span className="text-blue-600">App</span></h1>
-          <p className="text-slate-500 mb-8 font-medium">Masuk untuk memulai shift</p>
+          <p className="text-slate-500 mb-8 font-medium">Masuk untuk memulai sesi</p>
           
           {err && <div className="bg-red-50 text-red-600 p-3 rounded-xl mb-4 text-sm font-semibold">{err}</div>}
           
