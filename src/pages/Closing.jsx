@@ -73,7 +73,7 @@ export default function Closing() {
   // Atau bisa juga tidak pakai adjustment lagi jika modal sudah baku
   const relevantAdjustments = []; 
 
-  const { realPemasukan, realPengeluaran, realProfit, kasbonBaru, kasbonDilunasi } = shiftSales.reduce((acc, t) => {
+  const { realPemasukan, realPengeluaran, realProfit, kasbonBaru, kasbonDilunasi, digitalTransfer } = shiftSales.reduce((acc, t) => {
     // Tangani Pelunasan Piutang
     if (t.type === 'pelunasan_kasbon') {
       acc.kasbonDilunasi += (t.total || 0);
@@ -91,12 +91,18 @@ export default function Closing() {
         acc.realPengeluaran += nominal;
         if (item.feePaidVia === 'cash') {
           acc.realPemasukan += fee;
+        } else if (item.feePaidVia === 'transfer') {
+          acc.realPemasukan += fee;
+          acc.digitalTransfer += fee;
         }
       } else if (item.action === 'restock' || t.type === 'expenditure') {
         acc.realPengeluaran += total;
       } else {
         if (t.paymentMethod === 'kasbon') {
           acc.kasbonBaru += total; // barang keluar, hutang nambah, laci tidak nambah
+        } else if (t.paymentMethod === 'transfer') {
+          acc.realPemasukan += total;
+          acc.digitalTransfer += total;
         } else {
           acc.realPemasukan += total;
         }
@@ -117,7 +123,7 @@ export default function Closing() {
     acc.realProfit += transProfit;
 
     return acc;
-  }, { realPemasukan: 0, realPengeluaran: 0, realProfit: 0, kasbonBaru: 0, kasbonDilunasi: 0 });
+  }, { realPemasukan: 0, realPengeluaran: 0, realProfit: 0, kasbonBaru: 0, kasbonDilunasi: 0, digitalTransfer: 0 });
 
   // Add physical stock sales calculation
   const physicalProducts = useMemo(() => {
@@ -163,7 +169,7 @@ export default function Closing() {
   // Pakai Modal Shift yang sudah diset baku oleh Owner
   const modalAwalShift = balances.modalShift || 1000000;
   // expectedCash dikurangi penjualan yang masuk via transfer dan kasbon (bukan ke kas)
-  const expectedCash = modalAwalShift + finalPemasukan - realPengeluaran - totalPhysicalTransfer - kasbonBaru;
+  const expectedCash = modalAwalShift + finalPemasukan - realPengeluaran - totalPhysicalTransfer - digitalTransfer - kasbonBaru;
   
   const rawSetoran = (parseFloat(actualCash) || 0) - modalAwalShift;
   const setoran = Math.max(0, rawSetoran);
