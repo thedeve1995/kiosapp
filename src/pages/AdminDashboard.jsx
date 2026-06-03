@@ -608,33 +608,40 @@ export default function AdminDashboard() {
   ];
 
   return (
-    <div className="flex flex-col md:flex-row h-full bg-slate-50 overflow-hidden">
+    <div className="flex flex-col md:flex-row min-h-full bg-slate-900 overflow-hidden">
       
       {/* Sidebar Navigation */}
-      <div className="md:w-64 bg-white border-r border-slate-200 shadow-sm shrink-0 flex flex-row md:flex-col p-4 md:p-6 overflow-x-auto no-scrollbar gap-2 md:gap-4 z-10 w-full">
+      <div className="md:w-60 bg-slate-900 border-b md:border-b-0 md:border-r border-slate-800/80 shrink-0 flex flex-row md:flex-col p-3 md:p-5 overflow-x-auto no-scrollbar gap-2 md:gap-3 z-10 w-full">
          <div className="hidden md:flex justify-between items-center mb-6">
-           <h2 className="text-2xl font-black text-slate-900 italic uppercase tracking-widest">OWNER<span className="text-blue-600">.</span></h2>
+           <div>
+             <h2 className="text-xl font-black text-white tracking-tight">Owner<span className="text-indigo-400">.</span></h2>
+             <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest mt-0.5">Control Panel</p>
+           </div>
          </div>
          {user?.whatsapp && (
-           <div className="hidden md:flex mb-6 bg-blue-50 px-3 py-2 rounded-xl border border-blue-100 items-center gap-2">
-             <span className="text-[10px] font-black uppercase text-blue-700">WA: {user.whatsapp}</span>
+           <div className="hidden md:flex mb-4 bg-indigo-500/10 border border-indigo-500/20 px-3 py-2 rounded-xl items-center gap-2">
+             <span className="text-[10px] font-black uppercase text-indigo-400">WA: {user.whatsapp}</span>
            </div>
          )}
          <div className="flex md:flex-col gap-2">
            {TABS.map(t => (
-             <button 
-                key={t.id} 
-                onClick={() => setActiveTab(t.id)} 
-                className={`flex items-center gap-3 px-4 py-3 rounded-2xl transition-all whitespace-nowrap ${activeTab === t.id ? 'bg-slate-900 text-white shadow-lg' : 'bg-transparent text-slate-500 hover:bg-slate-100'}`}
-             >
-                <t.icon size={20} className={activeTab === t.id ? 'text-blue-400' : ''} />
-                <span className="font-bold text-sm">{t.label}</span>
-             </button>
+              <button 
+                 key={t.id} 
+                 onClick={() => setActiveTab(t.id)} 
+                 className={`flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all whitespace-nowrap ${
+                   activeTab === t.id 
+                     ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' 
+                     : 'text-slate-500 hover:text-slate-200 hover:bg-slate-800'
+                 }`}
+              >
+                 <t.icon size={18} className={activeTab === t.id ? 'text-indigo-200' : ''} />
+                 <span className="font-bold text-sm">{t.label}</span>
+              </button>
            ))}
          </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-slate-50/50 pb-20">
+      <div className="flex-1 overflow-y-auto p-4 md:p-6 pb-20 bg-slate-900">
         <div className="max-w-5xl mx-auto space-y-6">
 
         {activeTab === 'ringkasan' && (
@@ -642,44 +649,44 @@ export default function AdminDashboard() {
             {/* Stats Grid */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {stats.map((s, i) => (
-                <div key={i} className="bg-white p-5 rounded-[2rem] shadow-sm border border-slate-100 flex items-center gap-4 hover:shadow-lg transition-shadow">
+                <div key={i} className="bg-slate-800 p-5 rounded-3xl border border-slate-700/50 flex items-center gap-4 hover:border-indigo-500/30 hover:shadow-lg hover:shadow-indigo-500/10 transition-all">
                    <div className={`${s.bg} ${s.color} p-4 rounded-2xl`}><s.icon size={24} /></div>
-                   <div><p className="text-[10px] text-slate-500 font-extrabold uppercase tracking-wider">{s.title}</p><p className="text-xl font-black text-slate-800">{s.value}</p></div>
+                   <div><p className="text-[10px] text-slate-500 font-extrabold uppercase tracking-wider">{s.title}</p><p className="text-xl font-black text-white">{s.value}</p></div>
                 </div>
               ))}
             </div>
 
         {/* ===================== SECTION: PERMINTAAN PEMBATALAN ===================== */}
         {pendingCancellations.length > 0 && (
-          <div className="bg-amber-50 rounded-3xl p-6 shadow-sm border border-amber-200">
+          <div className="bg-amber-500/10 rounded-3xl p-5 border border-amber-500/30">
              <div className="flex items-center gap-2 mb-4">
-                <AlertOctagon size={24} className="text-amber-600"/>
-                <h3 className="font-bold text-amber-800 text-lg">Permintaan Pembatalan ({pendingCancellations.length})</h3>
+                <AlertOctagon size={22} className="text-amber-400"/>
+                <h3 className="font-bold text-amber-400 text-base">Permintaan Pembatalan ({pendingCancellations.length})</h3>
              </div>
              <div className="space-y-3">
                 {pendingCancellations.map(t => (
-                   <div key={t.id} className="bg-white p-4 rounded-2xl border border-amber-100 shadow-sm transition-all hover:border-amber-300">
+                   <div key={t.id} className="bg-slate-800 p-4 rounded-2xl border border-amber-500/20 hover:border-amber-500/40 transition-all">
                       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                          <div>
                             <div className="flex items-center gap-2 flex-wrap">
-                               <p className="font-black text-slate-800">{t.user}</p>
-                               <span className="text-[10px] text-slate-400 font-normal">
+                               <p className="font-black text-white">{t.user}</p>
+                               <span className="text-[10px] text-slate-500 font-normal">
                                  {t.timestamp ? new Date(t.timestamp.seconds * 1000).toLocaleString('id-ID') : '-'}
                                </span>
-                               <span className="bg-amber-100 text-amber-700 text-[9px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">MENUNGGU RESPON</span>
+                               <span className="bg-amber-500/20 text-amber-400 text-[9px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">MENUNGGU RESPON</span>
                             </div>
-                            <p className="text-xs text-slate-600 mt-1 italic">{t.items?.map(it=>it.name).join(', ') || t.type}</p>
-                            <p className="text-sm font-black text-red-500 mt-1">Rp {t.total?.toLocaleString()}</p>
+                            <p className="text-xs text-slate-400 mt-1 italic">{t.items?.map(it=>it.name).join(', ') || t.type}</p>
+                            <p className="text-sm font-black text-red-400 mt-1">Rp {t.total?.toLocaleString()}</p>
                             {t.profit !== undefined && t.profit > 0 && (
-                               <p className="text-[10px] font-bold text-amber-500 italic -mt-0.5">Laba: Rp {t.profit?.toLocaleString()}</p>
+                               <p className="text-[10px] font-bold text-amber-400 italic -mt-0.5">Laba: Rp {t.profit?.toLocaleString()}</p>
                             )}
                          </div>
                          <div className="flex items-center gap-2 w-full sm:w-auto mt-2 sm:mt-0 shrink-0">
-                            <button onClick={() => handleApproveCancellation(t)} className="flex-1 sm:flex-none px-4 py-2 bg-emerald-50 text-emerald-600 font-bold rounded-xl text-xs hover:bg-emerald-100 flex items-center justify-center gap-2 transition-colors">
-                               <Check size={16}/> Setujui
+                            <button onClick={() => handleApproveCancellation(t)} className="flex-1 sm:flex-none px-4 py-2 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-bold rounded-xl text-xs hover:bg-emerald-500/25 flex items-center justify-center gap-2 transition-all">
+                               <Check size={14}/> Setujui
                             </button>
-                            <button onClick={() => handleRejectCancellation(t.id)} className="flex-1 sm:flex-none px-4 py-2 bg-red-50 text-red-600 font-bold rounded-xl text-xs hover:bg-red-100 flex items-center justify-center gap-2 transition-colors">
-                               <X size={16}/> Tolak
+                            <button onClick={() => handleRejectCancellation(t.id)} className="flex-1 sm:flex-none px-4 py-2 bg-red-500/15 text-red-400 border border-red-500/30 font-bold rounded-xl text-xs hover:bg-red-500/25 flex items-center justify-center gap-2 transition-all">
+                               <X size={14}/> Tolak
                             </button>
                          </div>
                       </div>
@@ -694,34 +701,34 @@ export default function AdminDashboard() {
         {activeTab === 'karyawan' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
         {/* ===================== SECTION: SDM ===================== */}
-        <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
+        <div className="bg-slate-800 rounded-3xl p-5 border border-slate-700/50">
            <div className="flex items-center justify-between cursor-pointer" onClick={() => setShowKaryawan(!showKaryawan)}>
-              <h3 className="font-bold text-slate-800 flex items-center gap-2"><Users size={20} className="text-blue-600"/> Manajemen Karyawan ({employees.length})</h3>
-              <button className="p-1 hover:bg-slate-50 rounded-lg">{showKaryawan ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
+              <h3 className="font-bold text-white flex items-center gap-2"><Users size={18} className="text-indigo-400"/> Manajemen Karyawan ({employees.length})</h3>
+              <button className="p-1 hover:bg-slate-700 rounded-lg text-slate-400">{showKaryawan ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
            </div>
            <AnimatePresence>
               {showKaryawan && (
-                 <motion.div initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} className="space-y-6 mt-4 overflow-hidden">
+                 <motion.div initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} className="space-y-5 mt-5 overflow-hidden">
                     {msg.text && (
-                      <div className={`p-3 rounded-xl text-xs font-bold ${msg.type === 'success' ? 'bg-emerald-50 text-emerald-600':'bg-red-50 text-red-600'}`}>{msg.text}</div>
+                      <div className={`p-3 rounded-xl text-xs font-bold ${msg.type === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20':'bg-red-500/10 text-red-400 border border-red-500/20'}`}>{msg.text}</div>
                     )}
                     <form onSubmit={handleRegister} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                       <input type="text" required placeholder="Nama Lengkap" value={regForm.name} onChange={e=>setRegForm({...regForm, name:e.target.value})} className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
-                       <input type="email" required placeholder="Email" value={regForm.email} onChange={e=>setRegForm({...regForm, email:e.target.value})} className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
-                       <input type="password" required minLength={6} placeholder="Password (min 6)" value={regForm.password} onChange={e=>setRegForm({...regForm, password:e.target.value})} className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
-                       <button disabled={loadingReg} className="sm:col-span-3 bg-blue-600 text-white font-bold py-2.5 rounded-xl text-sm hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2">
+                       <input type="text" required placeholder="Nama Lengkap" value={regForm.name} onChange={e=>setRegForm({...regForm, name:e.target.value})} className="px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm font-medium text-white placeholder-slate-600 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none" />
+                       <input type="email" required placeholder="Email" value={regForm.email} onChange={e=>setRegForm({...regForm, email:e.target.value})} className="px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm font-medium text-white placeholder-slate-600 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none" />
+                       <input type="password" required minLength={6} placeholder="Password (min 6)" value={regForm.password} onChange={e=>setRegForm({...regForm, password:e.target.value})} className="px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm font-medium text-white placeholder-slate-600 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none" />
+                       <button disabled={loadingReg} className="sm:col-span-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-sm disabled:opacity-50 flex items-center justify-center gap-2 transition-all">
                          {loadingReg ? <Loader2 className="animate-spin" size={16}/> : <UserPlus size={16}/>} Daftarkan Karyawan
                        </button>
                     </form>
-                    <div className="divide-y border-t">
-                       {employees.length === 0 && <p className="text-center text-slate-400 text-sm py-4 italic">Belum ada karyawan terdaftar</p>}
+                    <div className="divide-y divide-slate-700/50 border-t border-slate-700/50">
+                       {employees.length === 0 && <p className="text-center text-slate-600 text-sm py-4 italic">Belum ada karyawan terdaftar</p>}
                        {employees.map((e, i) => (
                           <div key={i} className="py-3 flex justify-between items-center text-sm">
                             <div>
-                              <span className="font-bold text-slate-800">{e.name}</span>
-                              <span className="text-slate-400 text-xs ml-2">{e.email}</span>
+                              <span className="font-bold text-white">{e.name}</span>
+                              <span className="text-slate-500 text-xs ml-2">{e.email}</span>
                             </div>
-                            <span className="bg-blue-50 text-blue-600 text-[10px] font-black px-2 py-1 rounded-full uppercase">Karyawan</span>
+                            <span className="bg-indigo-500/15 text-indigo-400 border border-indigo-500/20 text-[10px] font-black px-2 py-1 rounded-full uppercase">Karyawan</span>
                           </div>
                        ))}
                     </div>
@@ -735,39 +742,39 @@ export default function AdminDashboard() {
         {activeTab === 'katalog' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
         {/* ===================== SECTION: KATALOG PRODUK ===================== */}
-        <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
+        <div className="bg-slate-800 rounded-3xl p-5 border border-slate-700/50">
            <div className="flex items-center justify-between cursor-pointer" onClick={() => setShowInventory(!showInventory)}>
-              <h3 className="font-bold text-slate-800 flex items-center gap-2"><Package size={20} className="text-blue-600"/> Katalog Produk ({products.length})</h3>
-              <button className="p-1 hover:bg-slate-50 rounded-lg">{showInventory ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
+              <h3 className="font-bold text-white flex items-center gap-2"><Package size={18} className="text-indigo-400"/> Katalog Produk ({products.length})</h3>
+              <button className="p-1 hover:bg-slate-700 rounded-lg text-slate-400">{showInventory ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
            </div>
            <AnimatePresence>
               {showInventory && (
-                 <motion.div initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} className="space-y-4 mt-4 overflow-hidden">
+                 <motion.div initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} className="space-y-4 mt-5 overflow-hidden">
                     {/* Product Form */}
-                    <form onSubmit={handleProductSubmit} className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-4 rounded-2xl border border-dashed border-slate-200">
-                       <input className="col-span-2 px-3 py-2.5 border border-slate-200 rounded-xl text-sm font-medium" placeholder="Nama Produk" required value={prodForm.name} onChange={e=>setProdForm({...prodForm, name:e.target.value})} />
-                       <select className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm font-medium bg-white" value={prodForm.category} onChange={e=>setProdForm({...prodForm, category:e.target.value})}>
+                    <form onSubmit={handleProductSubmit} className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-900/60 p-4 rounded-2xl border border-slate-700/50">
+                       <input className="col-span-2 px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm font-medium text-white placeholder-slate-600 focus:border-indigo-500 focus:outline-none" placeholder="Nama Produk" required value={prodForm.name} onChange={e=>setProdForm({...prodForm, name:e.target.value})} />
+                       <select className="px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm font-medium text-white focus:border-indigo-500 focus:outline-none" value={prodForm.category} onChange={e=>setProdForm({...prodForm, category:e.target.value})}>
                           {allCategories.map(c=><option key={c} value={c}>{c}</option>)}
                        </select>
-                       <select className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm font-medium bg-white" value={prodForm.type} onChange={e=>setProdForm({...prodForm, type:e.target.value})}>
+                       <select className="px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm font-medium text-white focus:border-indigo-500 focus:outline-none" value={prodForm.type} onChange={e=>setProdForm({...prodForm, type:e.target.value})}>
                           <option value="stok">Stok (Barang)</option>
                           <option value="jasa">Jasa (Layanan)</option>
                           <option value="saldo">Saldo (Isi Ulang)</option>
                        </select>
-                       <input className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm" type="number" placeholder="Modal / HPP" value={prodForm.costPrice} onChange={e=>setProdForm({...prodForm, costPrice:e.target.value})} />
-                       <input className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm" type="number" placeholder="Harga Jual" required value={prodForm.price} onChange={e=>setProdForm({...prodForm, price:e.target.value})} />
+                       <input className="px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-600 focus:border-indigo-500 focus:outline-none" type="number" placeholder="Modal / HPP" value={prodForm.costPrice} onChange={e=>setProdForm({...prodForm, costPrice:e.target.value})} />
+                       <input className="px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-600 focus:border-indigo-500 focus:outline-none" type="number" placeholder="Harga Jual" required value={prodForm.price} onChange={e=>setProdForm({...prodForm, price:e.target.value})} />
                        {prodForm.type === 'stok' && (
-                         <input className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm" type="number" placeholder="Stok" value={prodForm.stock} onChange={e=>setProdForm({...prodForm, stock:e.target.value})} />
+                         <input className="px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-600 focus:border-indigo-500 focus:outline-none" type="number" placeholder="Stok" value={prodForm.stock} onChange={e=>setProdForm({...prodForm, stock:e.target.value})} />
                        )}
                        {(prodForm.type === 'jasa' || prodForm.type === 'saldo') && (
-                         <select className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm font-medium bg-white" value={prodForm.action} onChange={e=>setProdForm({...prodForm, action:e.target.value})}>
+                         <select className="px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm font-medium text-white focus:border-indigo-500 focus:outline-none" value={prodForm.action} onChange={e=>setProdForm({...prodForm, action:e.target.value})}>
                            <option value="">-- Aksi --</option>
                            <option value="isi">Isi Saldo</option>
                            <option value="transfer">Transfer</option>
                            <option value="tarik">Tarik Tunai</option>
                          </select>
                        )}
-                       <button disabled={loadingProduct} className="col-span-2 sm:col-span-4 bg-slate-900 text-white py-2.5 rounded-xl font-bold text-sm hover:bg-slate-800 disabled:opacity-50 flex items-center justify-center gap-2">
+                       <button disabled={loadingProduct} className="col-span-2 sm:col-span-4 bg-indigo-600 hover:bg-indigo-500 text-white py-2.5 rounded-xl font-bold text-sm disabled:opacity-50 flex items-center justify-center gap-2 transition-all">
                          {loadingProduct ? <Loader2 className="animate-spin" size={16}/> : (isEditing ? <Save size={16}/> : <Plus size={16}/>)}
                          {isEditing ? 'Update Produk' : 'Tambah Produk'}
                        </button>
@@ -775,49 +782,49 @@ export default function AdminDashboard() {
 
                     {/* Auto Price & Search */}
                     <div className="flex flex-wrap gap-2 items-center">
-                      <button onClick={handleAutoPriceVouchers} className="bg-amber-50 text-amber-600 border border-amber-200 px-3 py-1.5 rounded-xl text-[11px] font-bold hover:bg-amber-100">
+                      <button onClick={handleAutoPriceVouchers} className="bg-amber-500/15 text-amber-400 border border-amber-500/20 px-3 py-1.5 rounded-xl text-[11px] font-bold hover:bg-amber-500/25 transition-all">
                         ⚡ Auto Harga Voucher (+10%)
                       </button>
                       <div className="flex-1 relative">
-                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
-                        <input className="w-full pl-8 pr-3 py-2 border border-slate-200 rounded-xl text-sm" placeholder="Cari produk..." value={searchTerm} onChange={e=>setSearchTerm(e.target.value)}/>
+                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600"/>
+                        <input className="w-full pl-8 pr-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500" placeholder="Cari produk..." value={searchTerm} onChange={e=>setSearchTerm(e.target.value)}/>
                       </div>
                     </div>
 
                     {/* Product Table */}
                     <div className="overflow-x-auto">
-                       <table className="w-full text-xs font-bold text-slate-600">
+                       <table className="w-full text-xs font-bold">
                           <thead>
-                            <tr className="border-b bg-slate-50">
-                              <th className="py-3 px-2 text-left">NAMA</th>
-                              <th className="py-3 px-2 text-center">KATEGORI</th>
-                              <th className="py-3 px-2 text-center">TIPE</th>
-                              <th className="py-3 px-2 text-center">MODAL</th>
-                              <th className="py-3 px-2 text-center">JUAL</th>
-                              <th className="py-3 px-2 text-center">LABA</th>
-                              <th className="py-3 px-2 text-center">STOK</th>
-                              <th className="py-3 px-2 text-right">AKSI</th>
+                            <tr className="border-b border-slate-700/50">
+                              <th className="py-3 px-2 text-left text-slate-500 uppercase tracking-wider">NAMA</th>
+                              <th className="py-3 px-2 text-center text-slate-500 uppercase tracking-wider">KAT</th>
+                              <th className="py-3 px-2 text-center text-slate-500 uppercase tracking-wider">TIPE</th>
+                              <th className="py-3 px-2 text-center text-slate-500 uppercase tracking-wider">MODAL</th>
+                              <th className="py-3 px-2 text-center text-slate-500 uppercase tracking-wider">JUAL</th>
+                              <th className="py-3 px-2 text-center text-slate-500 uppercase tracking-wider">LABA</th>
+                              <th className="py-3 px-2 text-center text-slate-500 uppercase tracking-wider">STOK</th>
+                              <th className="py-3 px-2 text-right text-slate-500 uppercase tracking-wider">AKSI</th>
                             </tr>
                           </thead>
                           <tbody>
                             {filteredProducts.map(p => (
-                              <tr key={p.id} className="border-b hover:bg-blue-50/30">
-                                <td className="py-3 px-2 text-left font-black text-slate-800">{p.name}</td>
-                                <td className="py-3 px-2 text-center"><span className="bg-slate-100 px-2 py-0.5 rounded-full text-[10px]">{p.category}</span></td>
-                                <td className="py-3 px-2 text-center"><span className={`px-2 py-0.5 rounded-full text-[10px] ${p.type === 'stok' ? 'bg-blue-50 text-blue-600' : p.type === 'saldo' ? 'bg-green-50 text-green-600' : 'bg-purple-50 text-purple-600'}`}>{p.type}</span></td>
-                                <td className="py-3 px-2 text-center italic text-slate-400">{p.costPrice?.toLocaleString() || '-'}</td>
-                                <td className="py-3 px-2 text-center text-blue-600">{p.price?.toLocaleString()}</td>
-                                <td className="py-3 px-2 text-center text-emerald-600 italic">{p.costPrice ? (p.price - p.costPrice).toLocaleString() : '-'}</td>
-                                <td className="py-3 px-2 text-center">{p.type === 'stok' ? p.stock : '∞'}</td>
+                              <tr key={p.id} className="border-b border-slate-700/30 hover:bg-indigo-500/5 transition-colors">
+                                <td className="py-3 px-2 text-left font-black text-white">{p.name}</td>
+                                <td className="py-3 px-2 text-center"><span className="bg-slate-700 text-slate-300 px-2 py-0.5 rounded-full text-[10px]">{p.category}</span></td>
+                                <td className="py-3 px-2 text-center"><span className={`px-2 py-0.5 rounded-full text-[10px] ${p.type === 'stok' ? 'bg-blue-500/15 text-blue-400' : p.type === 'saldo' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-violet-500/15 text-violet-400'}`}>{p.type}</span></td>
+                                <td className="py-3 px-2 text-center italic text-slate-500">{p.costPrice?.toLocaleString() || '-'}</td>
+                                <td className="py-3 px-2 text-center text-indigo-400">{p.price?.toLocaleString()}</td>
+                                <td className="py-3 px-2 text-center text-emerald-400 italic">{p.costPrice ? (p.price - p.costPrice).toLocaleString() : '-'}</td>
+                                <td className="py-3 px-2 text-center text-slate-400">{p.type === 'stok' ? p.stock : '∞'}</td>
                                 <td className="py-3 px-2 text-right space-x-1">
-                                  <button onClick={()=>startEdit(p)} className="p-1.5 text-amber-500 hover:bg-amber-50 rounded-lg"><Edit3 size={14}/></button>
-                                  <button onClick={()=>deleteProduct(p.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={14}/></button>
+                                  <button onClick={()=>startEdit(p)} className="p-1.5 text-amber-400 hover:bg-amber-500/15 rounded-lg transition-colors"><Edit3 size={14}/></button>
+                                  <button onClick={()=>deleteProduct(p.id)} className="p-1.5 text-red-400 hover:bg-red-500/15 rounded-lg transition-colors"><Trash2 size={14}/></button>
                                 </td>
                               </tr>
                             ))}
                           </tbody>
                        </table>
-                       {filteredProducts.length === 0 && <p className="text-center text-slate-400 text-sm py-6 italic">Tidak ada produk ditemukan</p>}
+                       {filteredProducts.length === 0 && <p className="text-center text-slate-600 text-sm py-6 italic">Tidak ada produk ditemukan</p>}
                     </div>
                  </motion.div>
               )}
@@ -827,42 +834,42 @@ export default function AdminDashboard() {
         )}
 
         {activeTab === 'keuangan' && (
-          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+          <div className="space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
         {/* ===================== SECTION: SALDO & MODAL ===================== */}
-        <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
+        <div className="bg-slate-800 rounded-3xl p-5 border border-slate-700/50">
            <div className="flex items-center justify-between cursor-pointer" onClick={() => setShowBalances(!showBalances)}>
-              <h3 className="font-bold text-slate-800 flex items-center gap-2"><Wallet size={20} className="text-blue-600"/> Saldo & Modal</h3>
-              <button className="p-1 hover:bg-slate-50 rounded-lg">{showBalances ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
+              <h3 className="font-bold text-white flex items-center gap-2"><Wallet size={18} className="text-indigo-400"/> Saldo & Modal</h3>
+              <button className="p-1 hover:bg-slate-700 rounded-lg text-slate-400">{showBalances ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
            </div>
            <AnimatePresence>
               {showBalances && (
-                 <motion.div initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} className="space-y-4 mt-4 overflow-hidden">
+                 <motion.div initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} className="space-y-4 mt-5 overflow-hidden">
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                        {Object.entries(balances).map(([k,v])=>(
-                          <div key={k} className="bg-slate-50 p-3 rounded-2xl border border-slate-100">
-                            <p className="text-[9px] uppercase font-black text-slate-400 tracking-wider">{k === 'modalShift' ? 'Modal Baku' : k}</p>
-                            <p className="text-sm font-black italic">{typeof v === 'number' ? `Rp ${v.toLocaleString()}` : v}</p>
+                          <div key={k} className="bg-slate-900/60 p-3 rounded-2xl border border-slate-700/50">
+                            <p className="text-[9px] uppercase font-black text-slate-500 tracking-wider">{k === 'modalShift' ? 'Modal Baku' : k}</p>
+                            <p className="text-sm font-black text-white italic">{typeof v === 'number' ? `Rp ${v.toLocaleString()}` : v}</p>
                           </div>
                        ))}
                     </div>
                     <form onSubmit={handleBalanceUpdate} className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                        <div>
-                         <label className="text-[10px] font-bold text-slate-500 uppercase">Cash</label>
-                         <input className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm" type="number" value={balForm.cash} onChange={e=>setBalForm({...balForm, cash:e.target.value})} />
+                         <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Cash</label>
+                         <input className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white focus:border-indigo-500 focus:outline-none" type="number" value={balForm.cash} onChange={e=>setBalForm({...balForm, cash:e.target.value})} />
                        </div>
                        <div>
-                         <label className="text-[10px] font-bold text-slate-500 uppercase">APK</label>
-                         <input className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm" type="number" value={balForm.apk} onChange={e=>setBalForm({...balForm, apk:e.target.value})} />
+                         <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">APK</label>
+                         <input className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white focus:border-indigo-500 focus:outline-none" type="number" value={balForm.apk} onChange={e=>setBalForm({...balForm, apk:e.target.value})} />
                        </div>
                        <div>
-                         <label className="text-[10px] font-bold text-slate-500 uppercase">Seabank</label>
-                         <input className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm" type="number" value={balForm.seabank} onChange={e=>setBalForm({...balForm, seabank:e.target.value})} />
+                         <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Seabank</label>
+                         <input className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white focus:border-indigo-500 focus:outline-none" type="number" value={balForm.seabank} onChange={e=>setBalForm({...balForm, seabank:e.target.value})} />
                        </div>
                        <div>
-                         <label className="text-[10px] font-bold text-slate-500 uppercase">Modal Shift</label>
-                         <input className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm" type="number" value={balForm.modalShift} onChange={e=>setBalForm({...balForm, modalShift:e.target.value})} />
+                         <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Modal Shift</label>
+                         <input className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white focus:border-indigo-500 focus:outline-none" type="number" value={balForm.modalShift} onChange={e=>setBalForm({...balForm, modalShift:e.target.value})} />
                        </div>
-                       <button disabled={loadingBal} className="col-span-2 sm:col-span-4 bg-indigo-600 text-white font-bold py-2.5 rounded-xl text-sm hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2">
+                       <button disabled={loadingBal} className="col-span-2 sm:col-span-4 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-sm disabled:opacity-50 flex items-center justify-center gap-2 transition-all">
                          {loadingBal ? <Loader2 className="animate-spin" size={16}/> : <Save size={16}/>} Update Saldo & Modal
                        </button>
                        <button 
@@ -877,7 +884,7 @@ export default function AdminDashboard() {
                              initialStocks: products.reduce((acc, p) => ({ ...acc, [p.id]: p.stock }), {})
                            });
                          }}
-                         className="col-span-2 sm:col-span-4 bg-red-50 text-red-600 border border-red-200 font-bold py-2.5 rounded-xl text-sm hover:bg-red-100 flex items-center justify-center gap-2 mt-4"
+                         className="col-span-2 sm:col-span-4 bg-red-500/10 text-red-400 border border-red-500/20 font-bold py-2.5 rounded-xl text-sm hover:bg-red-500/20 flex items-center justify-center gap-2 mt-2 transition-all"
                        >
                          <ShieldCheck size={18}/> Buka Fitur Super Audit (Rekonsiliasi Manual)
                        </button>
@@ -888,51 +895,51 @@ export default function AdminDashboard() {
         </div>
 
         {/* ===================== SECTION: MUTASI / PENYESUAIAN MANUAL ===================== */}
-        <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
+        <div className="bg-slate-800 rounded-3xl p-5 border border-slate-700/50">
              <div className="flex items-center justify-between cursor-pointer" onClick={() => setPenyesuaianModal(true)}>
-                <h3 className="font-bold text-slate-800 flex items-center gap-2"><Wallet size={20} className="text-purple-600"/> Mutasi / Penyesuaian Saldo Manual</h3>
-                <button className="p-2 hover:bg-slate-50 rounded-lg text-blue-600 font-bold text-xs flex items-center gap-1"><Plus size={16}/> BUKA FORM</button>
+                <h3 className="font-bold text-white flex items-center gap-2"><Wallet size={18} className="text-violet-400"/> Mutasi / Penyesuaian Saldo Manual</h3>
+                <button className="p-2 hover:bg-slate-700 rounded-lg text-indigo-400 font-bold text-xs flex items-center gap-1 border border-indigo-500/20 bg-indigo-500/10"><Plus size={16}/> BUKA FORM</button>
              </div>
         </div>
 
         {/* Penyesuaian Saldo Modal */}
         <AnimatePresence>
          {penyesuaianModal && (
-           <div className="fixed inset-0 bg-slate-900/60 z-[100] flex items-center justify-center p-4">
-              <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white p-6 rounded-3xl shadow-2xl w-full max-w-md">
+           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+              <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-slate-800 border border-slate-700/50 p-6 rounded-3xl shadow-2xl w-full max-w-md">
                  <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-xl font-black text-slate-900">Penyesuaian Saldo Manual</h3>
-                    <button onClick={() => setPenyesuaianModal(false)} className="p-2 bg-slate-100 rounded-full"><X size={20}/></button>
+                    <h3 className="text-xl font-black text-white">Penyesuaian Saldo Manual</h3>
+                    <button onClick={() => setPenyesuaianModal(false)} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-slate-400"><X size={20}/></button>
                  </div>
                  <form onSubmit={handlePenyesuaian} className="space-y-4 pb-4">
                     <div>
-                       <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Pilih Saldo</label>
-                       <select required className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold" value={penyesuaianForm.jenisSistem} onChange={e => setPenyesuaianForm({...penyesuaianForm, jenisSistem: e.target.value})}>
+                       <label className="text-[10px] font-black text-slate-500 uppercase ml-1 block mb-1.5">Pilih Saldo</label>
+                       <select required className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-xl font-bold text-white focus:border-indigo-500 focus:outline-none" value={penyesuaianForm.jenisSistem} onChange={e => setPenyesuaianForm({...penyesuaianForm, jenisSistem: e.target.value})}>
                           <option value="cash">Kas Fisik</option>
                           <option value="seabank">Seabank</option>
                           <option value="apk">Saldo APK / E-Wallet</option>
                        </select>
                     </div>
                     <div>
-                       <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Jenis Aksi</label>
-                       <select required className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold" value={penyesuaianForm.jenisAksi} onChange={e => setPenyesuaianForm({...penyesuaianForm, jenisAksi: e.target.value})}>
+                       <label className="text-[10px] font-black text-slate-500 uppercase ml-1 block mb-1.5">Jenis Aksi</label>
+                       <select required className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-xl font-bold text-white focus:border-indigo-500 focus:outline-none" value={penyesuaianForm.jenisAksi} onChange={e => setPenyesuaianForm({...penyesuaianForm, jenisAksi: e.target.value})}>
                           <option value="tambah">TAMBAH Saldo (+)</option>
                           <option value="kurang">KURANGI Saldo (-)</option>
                        </select>
                     </div>
                     <div>
-                       <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Nominal (Rp)</label>
-                       <input type="number" required placeholder="Rp Nominal" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-lg" value={penyesuaianForm.nominal} onChange={e => setPenyesuaianForm({...penyesuaianForm, nominal: e.target.value})} />
+                       <label className="text-[10px] font-black text-slate-500 uppercase ml-1 block mb-1.5">Nominal (Rp)</label>
+                       <input type="number" required placeholder="Rp Nominal" className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-xl font-bold text-lg text-white focus:border-indigo-500 focus:outline-none" value={penyesuaianForm.nominal} onChange={e => setPenyesuaianForm({...penyesuaianForm, nominal: e.target.value})} />
                     </div>
                     <div>
-                       <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Keterangan / Alasan</label>
-                       <input type="text" required placeholder="Penjelasan Mutasi" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold" value={penyesuaianForm.keterangan} onChange={e => setPenyesuaianForm({...penyesuaianForm, keterangan: e.target.value})} />
+                       <label className="text-[10px] font-black text-slate-500 uppercase ml-1 block mb-1.5">Keterangan / Alasan</label>
+                       <input type="text" required placeholder="Penjelasan Mutasi" className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-xl font-bold text-white focus:border-indigo-500 focus:outline-none" value={penyesuaianForm.keterangan} onChange={e => setPenyesuaianForm({...penyesuaianForm, keterangan: e.target.value})} />
                     </div>
-                    <div className="bg-purple-50 p-4 rounded-xl text-purple-600 text-xs font-bold flex items-start gap-2 border border-purple-100">
+                    <div className="bg-violet-500/10 p-4 rounded-xl text-violet-400 text-xs font-bold flex items-start gap-2 border border-violet-500/20">
                        <AlertOctagon size={18} className="shrink-0" />
                        <p>Aksi ini akan menyesuaikan saldo sistem secara manual (dicatat sebagai adjustment), dan tidak mempengaruhi total laba perputaran transaksi.</p>
                     </div>
-                    <button type="submit" disabled={loadingBal} className="w-full bg-purple-600 text-white font-black py-4 rounded-xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 mt-2 disabled:opacity-50">
+                    <button type="submit" disabled={loadingBal} className="w-full bg-violet-600 hover:bg-violet-500 text-white font-black py-4 rounded-xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 mt-2 disabled:opacity-50">
                        {loadingBal ? <Loader2 className="animate-spin" size={20}/> : <Wallet size={20} />} Simpan Penyesuaian
                     </button>
                  </form>
@@ -942,56 +949,56 @@ export default function AdminDashboard() {
         </AnimatePresence>
 
         {/* ===================== SECTION: LAPORAN ANALITIK ===================== */}
-        <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
+        <div className="bg-slate-800 rounded-3xl p-5 border border-slate-700/50">
            <div className="flex items-center justify-between cursor-pointer" onClick={() => setShowReport(!showReport)}>
-              <h3 className="font-bold text-slate-800 flex items-center gap-2"><BarChart3 size={20} className="text-blue-600"/> Laporan Analitik</h3>
-              <button className="p-1 hover:bg-slate-50 rounded-lg">{showReport ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
+              <h3 className="font-bold text-white flex items-center gap-2"><BarChart3 size={18} className="text-indigo-400"/> Laporan Analitik</h3>
+              <button className="p-1 hover:bg-slate-700 rounded-lg text-slate-400">{showReport ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
            </div>
            <AnimatePresence>
               {showReport && (
-                 <motion.div initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} className="space-y-4 mt-4 overflow-hidden">
+                 <motion.div initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} className="space-y-4 mt-5 overflow-hidden">
                     {/* Time Range Filter */}
                     <div className="flex gap-2">
                        {['Today','Week','Month'].map(r => (
-                         <button key={r} onClick={()=>setReportRange(r)} className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${reportRange===r ? 'bg-blue-600 text-white shadow-md':'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                         <button key={r} onClick={()=>setReportRange(r)} className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${reportRange===r ? 'bg-indigo-600 text-white shadow-md shadow-indigo-500/20':'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}>
                            {r === 'Today' ? 'Hari Ini' : r === 'Week' ? 'Seminggu' : 'Bulan Ini'}
                          </button>
                        ))}
                     </div>
                     {/* Summary Cards */}
                     <div className="grid grid-cols-3 gap-3">
-                      <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100">
-                        <p className="text-[10px] font-black text-blue-400 uppercase">Total</p>
-                        <p className="text-lg font-black text-blue-700">Rp {reportTotal.toLocaleString()}</p>
+                      <div className="bg-indigo-500/10 p-4 rounded-2xl border border-indigo-500/20">
+                        <p className="text-[10px] font-black text-indigo-400 uppercase">Total</p>
+                        <p className="text-base font-black text-indigo-300">Rp {reportTotal.toLocaleString()}</p>
                       </div>
-                      <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100">
+                      <div className="bg-emerald-500/10 p-4 rounded-2xl border border-emerald-500/20">
                         <p className="text-[10px] font-black text-emerald-400 uppercase">Laba</p>
-                        <p className="text-lg font-black text-emerald-700">Rp {reportProfit.toLocaleString()}</p>
+                        <p className="text-base font-black text-emerald-300">Rp {reportProfit.toLocaleString()}</p>
                       </div>
-                      <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100">
+                      <div className="bg-amber-500/10 p-4 rounded-2xl border border-amber-500/20">
                         <p className="text-[10px] font-black text-amber-400 uppercase">Rata-rata</p>
-                        <p className="text-lg font-black text-amber-700">Rp {reportAvg.toLocaleString()}</p>
+                        <p className="text-base font-black text-amber-300">Rp {reportAvg.toLocaleString()}</p>
                       </div>
                     </div>
                     {/* Category Breakdown */}
-                    <div className="bg-slate-50 rounded-2xl p-4 border border-dashed border-slate-200">
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-3">Laba Per Kategori</p>
-                      {Object.entries(categorySummary).length === 0 && <p className="text-xs italic text-slate-400 text-center">Tidak ada data</p>}
-                      <div className="space-y-2">
+                    <div className="bg-slate-900/60 rounded-2xl p-4 border border-slate-700/50">
+                      <p className="text-[10px] font-black text-slate-500 uppercase tracking-wider mb-3">Laba Per Kategori</p>
+                      {Object.entries(categorySummary).length === 0 && <p className="text-xs italic text-slate-600 text-center">Tidak ada data</p>}
+                      <div className="space-y-3">
                         {Object.entries(categorySummary).sort((a,b)=>b[1]-a[1]).map(([cat, val]) => (
                           <div key={cat} className="flex justify-between items-center">
-                            <span className="text-xs font-bold text-slate-700">{cat}</span>
-                            <div className="flex items-center gap-2">
-                              <div className="w-24 h-2 bg-slate-200 rounded-full overflow-hidden">
-                                <div className="h-full bg-blue-500 rounded-full" style={{width: `${Math.min(100, (val / reportTotal) * 100)}%`}}/>
+                            <span className="text-xs font-bold text-slate-300">{cat}</span>
+                            <div className="flex items-center gap-3">
+                              <div className="w-24 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                                <div className="h-full bg-indigo-500 rounded-full" style={{width: `${Math.min(100, (val / reportTotal) * 100)}%`}}/>
                               </div>
-                              <span className="text-xs font-black text-blue-600">Rp {val.toLocaleString()}</span>
+                              <span className="text-xs font-black text-indigo-400 w-24 text-right">Rp {val.toLocaleString()}</span>
                             </div>
                           </div>
                         ))}
                       </div>
                     </div>
-                    <p className="text-[10px] text-slate-400 font-medium text-center italic">{filteredReportTrans.length} transaksi dalam periode ini</p>
+                    <p className="text-[10px] text-slate-600 font-medium text-center italic">{filteredReportTrans.length} transaksi dalam periode ini</p>
                  </motion.div>
               )}
            </AnimatePresence>
@@ -1000,31 +1007,31 @@ export default function AdminDashboard() {
         )}
 
         {activeTab === 'riwayat' && (
-          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+          <div className="space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
         {/* ===================== SECTION: RIWAYAT CLOSING ===================== */}
-        <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
+        <div className="bg-slate-800 rounded-3xl p-5 border border-slate-700/50">
            <div className="flex items-center justify-between cursor-pointer" onClick={() => setShowClosings(!showClosings)}>
-              <h3 className="font-bold text-slate-800 flex items-center gap-2"><ListChecks size={20} className="text-blue-600"/> Riwayat Closing Shift ({closings.length})</h3>
-              <button className="p-1 hover:bg-slate-50 rounded-lg">{showClosings ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
+              <h3 className="font-bold text-white flex items-center gap-2"><ListChecks size={18} className="text-indigo-400"/> Riwayat Closing Shift ({closings.length})</h3>
+              <button className="p-1 hover:bg-slate-700 rounded-lg text-slate-400">{showClosings ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
            </div>
            <AnimatePresence>
               {showClosings && (
-                 <motion.div initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} className="space-y-3 mt-4 overflow-hidden">
-                    {closings.length === 0 && <p className="text-center text-slate-400 text-sm py-4 italic">Belum ada data closing</p>}
+                 <motion.div initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} className="space-y-3 mt-5 overflow-hidden">
+                    {closings.length === 0 && <p className="text-center text-slate-600 text-sm py-4 italic">Belum ada data closing</p>}
                     {closings.map(cl => (
-                       <div key={cl.id} onClick={() => setSelectedClosing(cl)} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 hover:border-blue-200 hover:bg-blue-50/30 cursor-pointer transition-all">
+                       <div key={cl.id} onClick={() => setSelectedClosing(cl)} className="p-4 bg-slate-900/60 rounded-2xl border border-slate-700/50 hover:border-indigo-500/30 hover:bg-indigo-500/5 cursor-pointer transition-all">
                           <div className="flex justify-between items-start">
                              <div>
-                                <p className="text-xs font-black text-slate-800">{cl.user} • <span className="text-blue-600">{cl.shift}</span></p>
-                                <p className="text-[10px] text-slate-400 italic">{cl.timestamp ? new Date(cl.timestamp.seconds * 1000).toLocaleString('id-ID') : '-'}</p>
+                                <p className="text-xs font-black text-white">{cl.user} • <span className="text-indigo-400">{cl.shift}</span></p>
+                                <p className="text-[10px] text-slate-500 italic">{cl.timestamp ? new Date(cl.timestamp.seconds * 1000).toLocaleString('id-ID') : '-'}</p>
                              </div>
                              <div className="text-right">
-                                <p className="text-sm font-black text-blue-600">Setoran: Rp {cl.setoran?.toLocaleString()}</p>
+                                <p className="text-sm font-black text-indigo-400">Setoran: Rp {cl.setoran?.toLocaleString()}</p>
                                 {cl.totalProfit !== undefined && (
-                                  <span className="bg-emerald-50 text-emerald-700 font-bold text-[10px] px-2 py-0.5 rounded-md italic">Laba: Rp {cl.totalProfit?.toLocaleString()}</span>
+                                  <span className="bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 font-bold text-[10px] px-2 py-0.5 rounded-md italic">Laba: Rp {cl.totalProfit?.toLocaleString()}</span>
                                 )}
                                 {cl.selisih !== undefined && (
-                                  <span className={`ml-1 text-[10px] font-black px-2 py-0.5 rounded-md ${cl.selisih >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}>
+                                  <span className={`ml-1 text-[10px] font-black px-2 py-0.5 rounded-md border ${cl.selisih >= 0 ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20'}`}>
                                     Selisih: Rp {cl.selisih?.toLocaleString()}
                                   </span>
                                 )}
@@ -1038,9 +1045,9 @@ export default function AdminDashboard() {
         </div>
 
         {/* ===================== SECTION: LOG TRANSAKSI ===================== */}
-        <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
+        <div className="bg-slate-800 rounded-3xl p-5 border border-slate-700/50">
            <div className="flex items-center justify-between cursor-pointer" onClick={() => setShowLogs(!showLogs)}>
-              <h3 className="font-bold text-slate-800 flex items-center gap-2"><History size={20} className="text-blue-600"/> Log Transaksi ({transactions.length})</h3>
+              <h3 className="font-bold text-white flex items-center gap-2"><History size={18} className="text-indigo-400"/> Log Transaksi ({transactions.length})</h3>
               <div className="flex gap-2 items-center">
                  {showLogs && (
                    <input 
@@ -1049,49 +1056,49 @@ export default function AdminDashboard() {
                      value={logSearchTerm}
                      onChange={(e) => setLogSearchTerm(e.target.value)}
                      onClick={(e) => e.stopPropagation()}
-                     className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 w-32 sm:w-48 transition-all"
+                     className="px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-semibold text-white placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 w-32 sm:w-48 transition-all"
                    />
                  )}
-                 <button className="p-1 hover:bg-slate-50 rounded-lg">{showLogs ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
+                 <button className="p-1 hover:bg-slate-700 rounded-lg text-slate-400">{showLogs ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
               </div>
            </div>
            <AnimatePresence>
               {showLogs && (
-                 <motion.div initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} className="divide-y mt-4 overflow-hidden">
+                 <motion.div initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} className="divide-y divide-slate-700/50 mt-4 overflow-hidden">
                      {filteredLogs.slice(0, 100).map(t => (
-                        <div key={t.id} className={`py-3 ${t.status === 'cancelled' ? 'opacity-50 bg-red-50/30' : ''}`}>
+                        <div key={t.id} className={`py-3 ${t.status === 'cancelled' ? 'opacity-40' : ''}`}>
                            <div className="flex justify-between items-start">
                               <div className="flex-1 min-w-0">
                                  <div className="flex items-center gap-2 flex-wrap">
-                                   <span className="text-xs font-black text-slate-800">{t.user}</span>
-                                   <span className="text-[10px] text-slate-400">• {t.shift}</span>
-                                   {t.type === 'adjustment' && <span className="bg-yellow-50 text-yellow-600 text-[9px] font-bold px-1.5 py-0.5 rounded-full">AUDIT</span>}
-                                   {t.type === 'expenditure' && <span className="bg-orange-50 text-orange-600 text-[9px] font-bold px-1.5 py-0.5 rounded-full">PENGELUARAN</span>}
-                                   {t.status === 'cancelled' && <span className="bg-red-100 text-red-600 text-[9px] font-bold px-1.5 py-0.5 rounded-full">BATAL</span>}
-                                   {(t.status === 'pending_cancellation' || t.status === 'cancellation_requested') && <span className="bg-amber-100 text-amber-700 text-[9px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">MINTA BATAL</span>}
-                                   {t.closed && <span className="bg-slate-100 text-slate-500 text-[9px] font-bold px-1.5 py-0.5 rounded-full flex items-center gap-0.5"><FileCheck2 size={10}/> Closed</span>}
+                                   <span className="text-xs font-black text-white">{t.user}</span>
+                                   <span className="text-[10px] text-slate-600">• {t.shift}</span>
+                                   {t.type === 'adjustment' && <span className="bg-yellow-500/15 text-yellow-400 border border-yellow-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full">AUDIT</span>}
+                                   {t.type === 'expenditure' && <span className="bg-orange-500/15 text-orange-400 border border-orange-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full">PENGELUARAN</span>}
+                                   {t.status === 'cancelled' && <span className="bg-red-500/15 text-red-400 border border-red-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full">BATAL</span>}
+                                   {(t.status === 'pending_cancellation' || t.status === 'cancellation_requested') && <span className="bg-amber-500/15 text-amber-400 border border-amber-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">MINTA BATAL</span>}
+                                   {t.closed && <span className="bg-slate-700 text-slate-400 text-[9px] font-bold px-1.5 py-0.5 rounded-full flex items-center gap-0.5"><FileCheck2 size={10}/> Closed</span>}
                                  </div>
-                                 <p className="text-[10px] text-slate-400 italic truncate mt-0.5">{t.items?.map(it=>it.name).join(', ') || (t.type === 'adjustment' ? 'Penyesuaian Manual' : '-')}</p>
-                                 {t.timestamp && <p className="text-[9px] text-slate-300 mt-0.5">{new Date(t.timestamp.seconds * 1000).toLocaleString('id-ID')}</p>}
+                                 <p className="text-[10px] text-slate-500 italic truncate mt-0.5">{t.items?.map(it=>it.name).join(', ') || (t.type === 'adjustment' ? 'Penyesuaian Manual' : '-')}</p>
+                                 {t.timestamp && <p className="text-[9px] text-slate-600 mt-0.5">{new Date(t.timestamp.seconds * 1000).toLocaleString('id-ID')}</p>}
                               </div>
                               <div className="text-right ml-2 shrink-0">
-                                 <p className={`text-sm font-black ${t.status === 'cancelled' ? 'text-red-400 line-through' : t.type === 'expenditure' ? 'text-orange-600' : 'text-emerald-600'}`}>
+                                 <p className={`text-sm font-black ${t.status === 'cancelled' ? 'text-red-400 line-through' : t.type === 'expenditure' ? 'text-orange-400' : 'text-white'}`}>
                                    Rp {t.total?.toLocaleString()}
                                  </p>
                                  {!['adjustment', 'cancelled'].includes(t.status) && t.profit !== undefined && t.profit > 0 && (
-                                    <span className="text-[10px] font-bold text-amber-500 italic block -mt-0.5 leading-tight">Laba: Rp {t.profit?.toLocaleString()}</span>
+                                    <span className="text-[10px] font-bold text-amber-400 italic block -mt-0.5 leading-tight">Laba: Rp {t.profit?.toLocaleString()}</span>
                                  )}
                                  {(t.status === 'pending_cancellation' || t.status === 'cancellation_requested') && (
                                    <div className="flex gap-1 mt-1 justify-end">
-                                     <button onClick={(e) => { e.stopPropagation(); handleApproveCancellation(t); }} className="p-1 bg-emerald-50 text-emerald-600 rounded-lg hover:bg-emerald-100" title="Setujui"><Check size={14}/></button>
-                                     <button onClick={(e) => { e.stopPropagation(); handleRejectCancellation(t.id); }} className="p-1 bg-red-50 text-red-600 rounded-lg hover:bg-red-100" title="Tolak"><X size={14}/></button>
+                                     <button onClick={(e) => { e.stopPropagation(); handleApproveCancellation(t); }} className="p-1 bg-emerald-500/15 text-emerald-400 rounded-lg hover:bg-emerald-500/25 transition-colors" title="Setujui"><Check size={14}/></button>
+                                     <button onClick={(e) => { e.stopPropagation(); handleRejectCancellation(t.id); }} className="p-1 bg-red-500/15 text-red-400 rounded-lg hover:bg-red-500/25 transition-colors" title="Tolak"><X size={14}/></button>
                                    </div>
                                  )}
                               </div>
                            </div>
                         </div>
                      ))}
-                     {filteredLogs.length === 0 && <p className="text-center text-slate-400 text-sm py-6 italic">Tidak ada transaksi ditemukan</p>}
+                     {filteredLogs.length === 0 && <p className="text-center text-slate-600 text-sm py-6 italic">Tidak ada transaksi ditemukan</p>}
                  </motion.div>
               )}
            </AnimatePresence>

@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { auth, db } from '../lib/firebase';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { doc, getDoc, collection, getDocs, limit, query } from 'firebase/firestore';
-import { Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff, Store, Loader2, ArrowRight } from 'lucide-react';
+import { motion } from 'framer-motion';
 
 export default function Login() {
   const setUser = useStore(state => state.setUser);
@@ -23,8 +24,7 @@ export default function Login() {
         const snap = await getDocs(q);
         if (snap.empty) setNoUsers(true);
       } catch (err) {
-        console.warn("checkUsers failed (likely due to unauthenticated access to firestore rules):", err.message);
-        // We can ignore this or assume noUsers=false if we don't have permission to check
+        console.warn("checkUsers failed:", err.message);
       }
     };
     checkUsers();
@@ -35,102 +35,147 @@ export default function Login() {
     setLoading(true);
     setErr('');
     try {
-      // Real Firebase Call
       const cred = await signInWithEmailAndPassword(auth, email, password);
-      const userDocRef = doc(db, 'users', cred.user.uid);
-      const docSnap = await getDoc(userDocRef);
+      const docSnap = await getDoc(doc(db, 'users', cred.user.uid));
       if (docSnap.exists()) {
         setUser({ uid: cred.user.uid, email: cred.user.email, ...docSnap.data() });
         navigate('/');
       } else {
-        setErr('User role not found');
+        setErr('Role pengguna tidak ditemukan.');
       }
     } catch (error) {
-       console.error("Login Error:", error);
-       if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
-          setErr('Email atau Password salah.');
-       } else if (error.message.includes('Missing or insufficient permissions')) {
-          setErr('Akses dihentikan oleh aturan keamanan sistem (Permission Denied). Hubungi Owner.');
-       } else {
-          setErr(error.message);
-       }
+      console.error("Login Error:", error);
+      if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+        setErr('Email atau Password salah.');
+      } else if (error.message.includes('Missing or insufficient permissions')) {
+        setErr('Akses ditolak oleh sistem keamanan. Hubungi Owner.');
+      } else {
+        setErr(error.message);
+      }
     } finally {
-       setLoading(false);
+      setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-white rounded-3xl p-8 shadow-2xl relative overflow-hidden">
-        {/* Decorative elements */}
-        <div className="absolute -top-16 -right-16 w-32 h-32 bg-blue-500 rounded-full blur-3xl opacity-20"></div>
-        <div className="absolute -bottom-16 -left-16 w-32 h-32 bg-emerald-500 rounded-full blur-3xl opacity-20"></div>
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 relative overflow-hidden font-sans">
+      {/* Background ambient glow */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute -top-48 -left-48 w-96 h-96 bg-indigo-600/20 rounded-full blur-3xl" />
+        <div className="absolute -bottom-48 -right-48 w-96 h-96 bg-violet-700/15 rounded-full blur-3xl" />
+        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-64 h-64 bg-indigo-900/20 rounded-full blur-3xl" />
+        {/* Grid pattern */}
+        <div className="absolute inset-0 opacity-[0.015]" style={{
+          backgroundImage: 'linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)',
+          backgroundSize: '40px 40px'
+        }} />
+      </div>
 
-        <div className="relative z-10">
-          <h1 className="text-3xl font-extrabold text-slate-900 mb-2">Kios<span className="text-blue-600">App</span></h1>
-          <p className="text-slate-500 mb-8 font-medium">Masuk untuk memulai sesi</p>
-          
-          {err && <div className="bg-red-50 text-red-600 p-3 rounded-xl mb-4 text-sm font-semibold">{err}</div>}
-          
-          <form onSubmit={handleLogin} className="space-y-5">
+      <motion.div
+        initial={{ opacity: 0, y: 24, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.5, ease: 'easeOut' }}
+        className="w-full max-w-sm relative z-10"
+      >
+        {/* Logo area */}
+        <div className="text-center mb-8">
+          <motion.div
+            initial={{ scale: 0.8, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ delay: 0.1, duration: 0.4 }}
+            className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-2xl mb-4 shadow-xl shadow-indigo-500/30"
+          >
+            <Store size={30} className="text-white" />
+          </motion.div>
+          <h1 className="text-3xl font-black text-white tracking-tight">
+            Kios<span className="text-indigo-400">App</span>
+          </h1>
+          <p className="text-slate-500 text-sm mt-1.5 font-medium">Sistem Manajemen Kios</p>
+        </div>
+
+        {/* Login Card */}
+        <div className="bg-slate-800/60 backdrop-blur-xl border border-slate-700/50 rounded-3xl p-6 shadow-2xl shadow-black/40">
+          {/* Error message */}
+          {err && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              className="bg-red-500/10 border border-red-500/30 text-red-400 p-3 rounded-xl mb-4 text-sm font-semibold"
+            >
+              {err}
+            </motion.div>
+          )}
+
+          <form onSubmit={handleLogin} className="space-y-4">
+            {/* Email */}
             <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-2">Email</label>
+              <label className="block text-[11px] font-black text-slate-500 uppercase tracking-widest mb-2">Email</label>
               <input
                 type="email"
                 required
                 value={email}
                 onChange={e => setEmail(e.target.value)}
-                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all font-medium"
-                placeholder="employee@kios.com"
+                className="w-full px-4 py-3 bg-slate-900/80 border border-slate-700 rounded-xl text-white placeholder-slate-700 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-medium text-sm"
+                placeholder="email@kios.com"
               />
             </div>
+
+            {/* Password */}
             <div>
-              <label className="block text-sm font-semibold text-slate-700 mb-2">Password</label>
+              <label className="block text-[11px] font-black text-slate-500 uppercase tracking-widest mb-2">Password</label>
               <div className="relative">
                 <input
                   type={showPassword ? 'text' : 'password'}
                   required
                   value={password}
                   onChange={e => setPassword(e.target.value)}
-                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all font-medium pr-12"
+                  className="w-full px-4 py-3 bg-slate-900/80 border border-slate-700 rounded-xl text-white placeholder-slate-700 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-medium text-sm pr-12"
                   placeholder="••••••••"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-slate-600 transition-colors rounded-lg hover:bg-slate-100"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-600 hover:text-slate-300 transition-colors rounded-lg"
                 >
-                  {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
             </div>
+
+            {/* Submit */}
             <button
+              type="submit"
               disabled={loading}
-              className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl hover:bg-blue-700 active:scale-[0.98] transition-all disabled:opacity-70 disabled:active:scale-100 flex justify-center shadow-lg shadow-blue-600/20"
+              className="w-full mt-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3.5 rounded-xl transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed shadow-lg shadow-indigo-500/25 flex items-center justify-center gap-2 text-sm"
             >
-              {loading ? 'Masuk...' : 'Masuk'}
+              {loading ? (
+                <><Loader2 size={18} className="animate-spin" /> Masuk...</>
+              ) : (
+                <>Masuk <ArrowRight size={16} /></>
+              )}
             </button>
           </form>
 
-          <div className="mt-8 pt-6 border-t border-slate-100">
-             {noUsers ? (
-               <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 text-center">
-                  <p className="text-xs text-blue-600 font-bold mb-3 italic">Sistem terdeteksi baru / kosong.</p>
-                  <button 
-                    onClick={() => navigate('/setup-owner')}
-                    className="w-full bg-slate-900 text-white text-xs font-black py-2.5 rounded-lg hover:bg-slate-800 transition-all uppercase tracking-widest"
-                  >
-                    Daftar Owner Utama
-                  </button>
-               </div>
-             ) : (
-               <p className="text-[10px] text-slate-400 text-center font-bold uppercase tracking-tighter opacity-60">
-                 Kiosk Management System v1.0
-               </p>
-             )}
-          </div>
+          {/* Setup owner */}
+          {noUsers && (
+            <div className="mt-5 pt-5 border-t border-slate-700/50">
+              <div className="bg-indigo-500/10 border border-indigo-500/20 p-4 rounded-2xl text-center">
+                <p className="text-xs text-indigo-400 font-bold mb-3 italic">Sistem terdeteksi baru / kosong.</p>
+                <button
+                  onClick={() => navigate('/setup-owner')}
+                  className="w-full bg-slate-700 hover:bg-slate-600 text-white text-xs font-black py-2.5 rounded-xl transition-all uppercase tracking-widest"
+                >
+                  Daftar Owner Utama
+                </button>
+              </div>
+            </div>
+          )}
         </div>
-      </div>
+
+        <p className="text-center text-slate-700 text-[10px] font-bold uppercase tracking-widest mt-6">
+          Kiosk Management System v1.0
+        </p>
+      </motion.div>
     </div>
   );
 }
