@@ -90,7 +90,23 @@ export function printClosingRawBT(data) {
     hasMutation = true;
   }
   if (data.kasbonDilunasi > 0) {
-    text += leftRight('Pelunasan Masuk Laci', `Rp ${data.kasbonDilunasi.toLocaleString('id-ID')}`) + '\n';
+    const hasBreakdown =
+      data.kasbonDilunasiCash !== undefined ||
+      data.kasbonDilunasiTransfer !== undefined ||
+      data.kasbonDilunasiQris !== undefined;
+    if (hasBreakdown) {
+      if (data.kasbonDilunasiCash > 0) {
+        text += leftRight('Bayar Kasbon (Tunai)', `Rp ${data.kasbonDilunasiCash.toLocaleString('id-ID')}`) + '\n';
+      }
+      if (data.kasbonDilunasiTransfer > 0) {
+        text += leftRight('Bayar Kasbon (Bank)', `Rp ${data.kasbonDilunasiTransfer.toLocaleString('id-ID')}`) + '\n';
+      }
+      if (data.kasbonDilunasiQris > 0) {
+        text += leftRight('Bayar Kasbon (QRIS)', `Rp ${data.kasbonDilunasiQris.toLocaleString('id-ID')}`) + '\n';
+      }
+    } else {
+      text += leftRight('Pelunasan Masuk Laci', `Rp ${data.kasbonDilunasi.toLocaleString('id-ID')}`) + '\n';
+    }
     hasMutation = true;
   }
   if (data.qrisTransfer > 0) {

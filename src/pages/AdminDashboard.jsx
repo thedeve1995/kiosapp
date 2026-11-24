@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useStore } from '../store/useStore';
 import { db } from '../lib/firebase';
-import { collection, onSnapshot, doc, setDoc, query, where, serverTimestamp, addDoc, updateDoc, increment, writeBatch, deleteDoc, getDocs, orderBy, limit, Timestamp } from 'firebase/firestore';
+import { collection, onSnapshot, doc, setDoc, query, where, serverTimestamp, addDoc, updateDoc, increment, writeBatch, deleteDoc, getDocs, getDoc, orderBy, limit, Timestamp } from 'firebase/firestore';
 import { initializeApp, getApp, getApps } from 'firebase/app';
 import { createUserWithEmailAndPassword, getAuth } from 'firebase/auth';
 import { useNavigate } from 'react-router-dom';
@@ -13,6 +13,8 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { printClosingRawBT } from '../lib/printClosingRawBT';
+import { getTransactionBalanceDeltas } from '../lib/balanceHistory';
+import { buildKasbonPaymentReversal, getKasbonSummary, getKasbonMethodMeta } from '../lib/kasbon';
 
 
 // === Helper Functions ===
@@ -404,72 +406,88 @@ export default function AdminDashboard() {
   };
 
   const handleApproveCancellation = async (log) => {
+    const isParentKasbon = (log.paymentMethod === 'kasbon' || log.kasbonStatus) && log.type !== 'pelunasan_kasbon';
+    if (isParentKasbon) {
+      const { paid } = getKasbonSummary(log);
+      if (paid > 0) {
+        alert(`Kasbon ini sudah memiliki cicilan Rp ${paid.toLocaleString('id-ID')}. Batalkan transaksi cicilannya terlebih dahulu sebelum membatalkan kasbon induk.`);
+        return;
+      }
+    }
     if (!window.confirm("Setujui pembatalan ini? Saldo dan Stok akan dikembalikan otomatis.")) return;
     try {
       const batch = writeBatch(db);
 
       let cashDelta = 0, seabankDelta = 0, apkDelta = 0, qrisDelta = 0;
 
-      log.items?.forEach(item => {
-        const q = item.qty || 1;
-        const isExpenditure = log.type === 'expenditure';
+      if (log.type === 'pelunasan_kasbon') {
+        const d = getTransactionBalanceDeltas(log);
+        cashDelta -= d.cash;
+        seabankDelta -= d.seabank;
+        apkDelta -= d.apk;
+        qrisDelta -= d.qris;
+      } else {
+        log.items?.forEach(item => {
+          const q = item.qty || 1;
+          const isExpenditure = log.type === 'expenditure';
 
-        if (isExpenditure) {
-          cashDelta += (item.total || (item.price * q));
-        } else {
-          // ==========================================
-          // MIRROR OF getItemBalanceDeltas (POS.jsx)
-          // ==========================================
-          const fee = (item.fee || 0) * q;
-          const nominal = (item.nominal || 0) * q;
-          const price = item.price * q;
-          const cost = (Number(item.costPrice) || 0) * q;
-          let iCash = 0, iSeabank = 0, iApk = 0, iQris = 0;
-          const pm = log.paymentMethod;
-
-          if (pm !== 'kasbon') {
-            if (item.action === 'tarik') {
-              iCash -= nominal;
-              if (item.feePaidVia === 'cash') iCash += fee;
-              else if (item.feePaidVia === 'qris') iQris += fee;
-            } else if (item.type === 'stok') {
-              if (pm === 'transfer') iSeabank += price;
-              else if (pm === 'qris') iQris += price;
-              else iCash += price;
-            } else {
-              if (pm === 'transfer') iSeabank += price;
-              else if (pm === 'qris') iQris += price;
-              else iCash += price;
-            }
+          if (isExpenditure) {
+            cashDelta += (item.total || (item.price * q));
           } else {
-            if (item.action === 'tarik') iCash -= nominal;
-          }
+            // ==========================================
+            // MIRROR OF getItemBalanceDeltas (POS.jsx)
+            // ==========================================
+            const fee = (item.fee || 0) * q;
+            const nominal = (item.nominal || 0) * q;
+            const price = item.price * q;
+            const cost = (Number(item.costPrice) || 0) * q;
+            let iCash = 0, iSeabank = 0, iApk = 0, iQris = 0;
+            const pm = log.paymentMethod;
 
-          if (item.type === 'jasa' || item.type === 'saldo') {
-            if (item.action === 'transfer') iSeabank -= cost;
-            else if (item.action === 'tarik') {
-              if (pm === 'qris') iQris += nominal;
-              else iSeabank += nominal;
-              
-              if (pm !== 'kasbon' && item.feePaidVia === 'transfer') iSeabank += fee;
+            if (pm !== 'kasbon') {
+              if (item.action === 'tarik') {
+                iCash -= nominal;
+                if (item.feePaidVia === 'cash') iCash += fee;
+                else if (item.feePaidVia === 'qris') iQris += fee;
+              } else if (item.type === 'stok') {
+                if (pm === 'transfer') iSeabank += price;
+                else if (pm === 'qris') iQris += price;
+                else iCash += price;
+              } else {
+                if (pm === 'transfer') iSeabank += price;
+                else if (pm === 'qris') iQris += price;
+                else iCash += price;
+              }
             } else {
-              iApk -= cost;
+              if (item.action === 'tarik') iCash -= nominal;
             }
-          }
-          
-          // Reversal means subtracting the forward delta
-          cashDelta -= iCash;
-          seabankDelta -= iSeabank;
-          apkDelta -= iApk;
-          qrisDelta -= iQris;
-        }
 
-        // 3. Reversal Stock
-        if (item.type === 'stok' && item.firebaseId) {
-          const stockChange = item.action === 'restock' ? -q : q;
-          batch.update(doc(db, 'products', item.firebaseId), { stock: increment(stockChange) });
-        }
-      });
+            if (item.type === 'jasa' || item.type === 'saldo') {
+              if (item.action === 'transfer') iSeabank -= cost;
+              else if (item.action === 'tarik') {
+                if (pm === 'qris') iQris += nominal;
+                else iSeabank += nominal;
+                
+                if (pm !== 'kasbon' && item.feePaidVia === 'transfer') iSeabank += fee;
+              } else {
+                iApk -= cost;
+              }
+            }
+            
+            // Reversal means subtracting the forward delta
+            cashDelta -= iCash;
+            seabankDelta -= iSeabank;
+            apkDelta -= iApk;
+            qrisDelta -= iQris;
+          }
+
+          // 3. Reversal Stock
+          if (item.type === 'stok' && item.firebaseId) {
+            const stockChange = item.action === 'restock' ? -q : q;
+            batch.update(doc(db, 'products', item.firebaseId), { stock: increment(stockChange) });
+          }
+        });
+      }
 
       // Atomic balance update — aman dari race condition
       batch.update(doc(db, 'balances', 'current'), {
@@ -479,16 +497,15 @@ export default function AdminDashboard() {
         qris: increment(qrisDelta)
       });
       const updateData = { status: 'cancelled', approvedBy: user.name, approvedAt: serverTimestamp() };
-      if (log.paymentMethod === 'kasbon' || log.kasbonStatus) {
+      if (isParentKasbon) {
         updateData.kasbonStatus = 'batal';
       }
       if (log.type === 'pelunasan_kasbon' && log.kasbonLunasId) {
-        batch.update(doc(db, 'transactions', log.kasbonLunasId), {
-          kasbonStatus: 'belum_lunas',
-          pelunasanShift: null,
-          pelunasanUser: null,
-          dipelunasiPada: null
-        });
+        const parentRef = doc(db, 'transactions', log.kasbonLunasId);
+        const parentSnap = await getDoc(parentRef);
+        if (parentSnap.exists()) {
+          batch.update(parentRef, buildKasbonPaymentReversal(parentSnap.data(), log));
+        }
       }
       batch.update(doc(db, 'transactions', log.id), updateData);
       await batch.commit();
@@ -816,7 +833,12 @@ export default function AdminDashboard() {
                                  {t.timestamp ? new Date(t.timestamp.seconds * 1000).toLocaleString('id-ID') : '-'}
                                </span>
                                <span className="bg-amber-500/20 text-amber-600 dark:text-amber-400 text-[9px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">MENUNGGU RESPON</span>
-                               {(t.paymentMethod === 'kasbon' || t.kasbonName) && (
+                               {t.type === 'pelunasan_kasbon' && (
+                                 <span className={`border text-[9px] font-bold px-1.5 py-0.5 rounded-full ${getKasbonMethodMeta(t.paymentMethod).badgeCls}`}>
+                                   {t.isPartial ? 'CICILAN KASBON' : 'PELUNASAN KASBON'} • {getKasbonMethodMeta(t.paymentMethod).shortLabel.toUpperCase()}
+                                 </span>
+                               )}
+                               {t.type !== 'pelunasan_kasbon' && (t.paymentMethod === 'kasbon' || t.kasbonName) && (
                                  <span className="bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full">
                                    KASBON: {t.kasbonName || 'Konsumen'}
                                  </span>
@@ -1272,7 +1294,17 @@ export default function AdminDashboard() {
                                    <span className="text-[10px] text-slate-400 dark:text-slate-600">• {t.shift}</span>
                                    {t.type === 'adjustment' && <span className="bg-yellow-500/15 text-yellow-400 border border-yellow-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full">AUDIT</span>}
                                    {t.type === 'expenditure' && <span className="bg-orange-500/15 text-orange-600 dark:text-orange-400 border border-orange-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full">PENGELUARAN</span>}
-                                   {(t.paymentMethod === 'kasbon' || t.kasbonName) && <span className="bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full">{t.kasbonName ? `Kasbon: ${t.kasbonName}` : 'Kasbon'}</span>}
+                                   {t.type === 'pelunasan_kasbon' && (
+                                     <span className={`border text-[9px] font-bold px-1.5 py-0.5 rounded-full ${getKasbonMethodMeta(t.paymentMethod).badgeCls}`}>
+                                       {t.isPartial ? 'Cicilan Kasbon' : 'Pelunasan Kasbon'} • {getKasbonMethodMeta(t.paymentMethod).shortLabel}
+                                     </span>
+                                   )}
+                                   {t.type !== 'pelunasan_kasbon' && (t.paymentMethod === 'kasbon' || t.kasbonName) && (
+                                     <span className="bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full">
+                                       {t.kasbonName ? `Kasbon: ${t.kasbonName}` : 'Kasbon'}
+                                       {t.kasbonStatus === 'belum_lunas' && (t.kasbonPaid || 0) > 0 ? ` (Dicicil Rp ${(t.kasbonPaid || 0).toLocaleString('id-ID')})` : ''}
+                                     </span>
+                                   )}
                                    {t.status === 'cancelled' && <span className="bg-red-500/15 text-red-600 dark:text-red-400 border border-red-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full">BATAL</span>}
                                    {(t.status === 'pending_cancellation' || t.status === 'cancellation_requested') && <span className="bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">MINTA BATAL</span>}
                                    {t.closed && <span className="bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-400 text-[9px] font-bold px-1.5 py-0.5 rounded-full flex items-center gap-0.5"><FileCheck2 size={10}/> Closed</span>}

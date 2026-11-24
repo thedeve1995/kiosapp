@@ -147,6 +147,13 @@ export function getTransactionBalanceDeltas(log) {
 
   if (log.type === 'pelunasan_kasbon') {
     const total = Number(log.total) || 0;
+    const pm = log.paymentMethod || 'cash';
+    if (pm === 'transfer') {
+      return { cash: 0, seabank: total, apk: 0, qris: 0, mixedBalances: [] };
+    }
+    if (pm === 'qris') {
+      return { cash: 0, seabank: 0, apk: 0, qris: total, mixedBalances: [] };
+    }
     return { cash: total, seabank: 0, apk: 0, qris: 0, mixedBalances: [] };
   }
 
@@ -204,9 +211,12 @@ export function getTransactionBadgeInfo(log) {
     };
   }
   if (log.type === 'pelunasan_kasbon') {
+    const pm = log.paymentMethod || 'cash';
+    const base = PAYMENT_BADGE_MAP[pm] || PAYMENT_BADGE_MAP.cash;
+    const prefix = log.isPartial ? 'Cicilan Kasbon' : 'Pelunasan Kasbon';
     return {
-      label: 'Pelunasan Kasbon',
-      cls: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/20',
+      label: `${prefix} • ${base.label}`,
+      cls: base.cls,
     };
   }
   if (log.type === 'stok') {

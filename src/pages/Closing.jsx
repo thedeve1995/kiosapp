@@ -59,10 +59,25 @@ export default function Closing() {
 
   const shiftSales = shiftTrans;
 
-  const { realPemasukan, realPengeluaran, realProfit, kasbonBaru, kasbonDilunasi, digitalTransfer, qrisTransfer } = shiftSales.reduce((acc, t) => {
+  const {
+    realPemasukan, realPengeluaran, realProfit, kasbonBaru,
+    kasbonDilunasi, kasbonDilunasiCash, kasbonDilunasiTransfer, kasbonDilunasiQris,
+    digitalTransfer, qrisTransfer
+  } = shiftSales.reduce((acc, t) => {
     if (t.type === 'pelunasan_kasbon') {
-      acc.kasbonDilunasi += (t.total || 0);
-      acc.realPemasukan  += (t.total || 0);
+      const amt = Number(t.total) || 0;
+      const pm = t.paymentMethod || 'cash';
+      acc.kasbonDilunasi += amt;
+      acc.realPemasukan  += amt;
+      if (pm === 'transfer') {
+        acc.digitalTransfer += amt;
+        acc.kasbonDilunasiTransfer += amt;
+      } else if (pm === 'qris') {
+        acc.qrisTransfer += amt;
+        acc.kasbonDilunasiQris += amt;
+      } else {
+        acc.kasbonDilunasiCash += amt;
+      }
       return acc;
     }
     t.items?.forEach(item => {
@@ -95,7 +110,11 @@ export default function Closing() {
       : (Number(t.profit) || 0));
     acc.realProfit += transProfit;
     return acc;
-  }, { realPemasukan: 0, realPengeluaran: 0, realProfit: 0, kasbonBaru: 0, kasbonDilunasi: 0, digitalTransfer: 0, qrisTransfer: 0 });
+  }, {
+    realPemasukan: 0, realPengeluaran: 0, realProfit: 0, kasbonBaru: 0,
+    kasbonDilunasi: 0, kasbonDilunasiCash: 0, kasbonDilunasiTransfer: 0, kasbonDilunasiQris: 0,
+    digitalTransfer: 0, qrisTransfer: 0
+  });
 
   const physicalProducts = useMemo(() =>
     products.filter(p => p.type === 'stok').sort((a, b) => {
@@ -213,7 +232,9 @@ export default function Closing() {
         shift, user: user.name, modalAwal: modalAwalShift,
         pemasukan: realPemasukan, pengeluaran: realPengeluaran,
         expectedCash, actualCash: parseFloat(actualCash), selisih, setoran,
-        totalProfit: finalProfit, kasbonBaru, kasbonDilunasi, note: keterangan,
+        totalProfit: finalProfit, kasbonBaru, kasbonDilunasi,
+        kasbonDilunasiCash, kasbonDilunasiTransfer, kasbonDilunasiQris,
+        note: keterangan,
         timestamp: serverTimestamp(), physicalSales: physicalSalesLog,
         expenseDetails: expenseLog,
         finalBalances
@@ -253,6 +274,7 @@ export default function Closing() {
       // WhatsApp text
       const digitalSummary = shiftSales.reduce((acc, t) => {
         if (t.type === 'expenditure') { acc.expenses += (t.total || 0); return acc; }
+        if (t.type === 'pelunasan_kasbon') return acc;
         const key = t.items?.[0]?.action === 'tarik' ? 'Tarik Tunai' : 'TopUp/Jasa';
         if (!acc.groups[key]) acc.groups[key] = { count: 0, volume: 0, profit: 0 };
         acc.groups[key].count  += 1;
@@ -269,7 +291,13 @@ export default function Closing() {
         ? expenseLog.map(e => `- ${e.name}: Rp ${e.amount.toLocaleString()}`).join('\n') + `\nTotal: Rp ${realPengeluaran.toLocaleString()}`
         : '- (Tidak ada pengeluaran)';
 
-      const waText = `*LAPORAN CLOSING SESI*\n--------------------------\nPetugas: ${user.name}\nShift: ${shift}\nTanggal: ${new Date().toLocaleDateString('id-ID')}\n\n*PENJUALAN FISIK (STOK):*\n${physicalText}\nSubtotal Laba Fisik: Rp ${physicalProfit.toLocaleString()}\n\n*RINGKASAN DIGITAL:*\n${digitalText}\nSubtotal Laba Digital: Rp ${realProfit.toLocaleString()}\n\n*PENGELUARAN (CASH OUT):*\n${expenseText}\n\n*TARGET BELANJA (STOK TIPIS):*\n${restockText}\n\n*REKAPITULASI AKHIR:*\nModal Awal: Rp ${modalAwalShift.toLocaleString()}\n${kasbonBaru > 0 ? `Piutang (Kasbon Baru): Rp ${kasbonBaru.toLocaleString()}\n` : ''}${kasbonDilunasi > 0 ? `Pelunasan Kasbon (Masuk Laci): Rp ${kasbonDilunasi.toLocaleString()}\n` : ''}${qrisTransfer > 0 ? `Mutasi Masuk QRIS: Rp ${qrisTransfer.toLocaleString()}\n` : ''}Sistem Final (Expected): Rp ${expectedCash.toLocaleString()}\nFisik Laci: Rp ${parseFloat(actualCash).toLocaleString()}\nSelisih: ${selisih > 0 ? '+' : ''}Rp ${selisih.toLocaleString()}\n--------------------------\n*ESTIMASI TOTAL LABA: Rp ${finalProfit.toLocaleString()}*\n*SETORAN KE OWNER: Rp ${setoran.toLocaleString()}*${isBelowModal ? `\n\n_Keterangan: ${keterangan}_` : ''}\n\n*POSISI SALDO TERAKHIR:*\n- Cash: Rp ${newCashBalance.toLocaleString()}\n- Bank: Rp ${newSeabankBalance.toLocaleString()}\n- APK: Rp ${apkBalance.toLocaleString()}\n- QRIS: Rp ${qrisBalance.toLocaleString()}\n*Total Saldo: Rp ${totalSaldoAkhir.toLocaleString()}*\n\nTerima kasih.`;
+      const kasbonPayParts = [];
+      if (kasbonDilunasiCash > 0) kasbonPayParts.push(`Tunai Rp ${kasbonDilunasiCash.toLocaleString()}`);
+      if (kasbonDilunasiTransfer > 0) kasbonPayParts.push(`Transfer Rp ${kasbonDilunasiTransfer.toLocaleString()}`);
+      if (kasbonDilunasiQris > 0) kasbonPayParts.push(`QRIS Rp ${kasbonDilunasiQris.toLocaleString()}`);
+      const kasbonPayDetail = kasbonPayParts.length > 0 ? ` (${kasbonPayParts.join(', ')})` : '';
+
+      const waText = `*LAPORAN CLOSING SESI*\n--------------------------\nPetugas: ${user.name}\nShift: ${shift}\nTanggal: ${new Date().toLocaleDateString('id-ID')}\n\n*PENJUALAN FISIK (STOK):*\n${physicalText}\nSubtotal Laba Fisik: Rp ${physicalProfit.toLocaleString()}\n\n*RINGKASAN DIGITAL:*\n${digitalText}\nSubtotal Laba Digital: Rp ${realProfit.toLocaleString()}\n\n*PENGELUARAN (CASH OUT):*\n${expenseText}\n\n*TARGET BELANJA (STOK TIPIS):*\n${restockText}\n\n*REKAPITULASI AKHIR:*\nModal Awal: Rp ${modalAwalShift.toLocaleString()}\n${kasbonBaru > 0 ? `Piutang (Kasbon Baru): Rp ${kasbonBaru.toLocaleString()}\n` : ''}${kasbonDilunasi > 0 ? `Bayar/Cicil Kasbon: Rp ${kasbonDilunasi.toLocaleString()}${kasbonPayDetail}\n` : ''}${qrisTransfer > 0 ? `Mutasi Masuk QRIS: Rp ${qrisTransfer.toLocaleString()}\n` : ''}Sistem Final (Expected): Rp ${expectedCash.toLocaleString()}\nFisik Laci: Rp ${parseFloat(actualCash).toLocaleString()}\nSelisih: ${selisih > 0 ? '+' : ''}Rp ${selisih.toLocaleString()}\n--------------------------\n*ESTIMASI TOTAL LABA: Rp ${finalProfit.toLocaleString()}*\n*SETORAN KE OWNER: Rp ${setoran.toLocaleString()}*${isBelowModal ? `\n\n_Keterangan: ${keterangan}_` : ''}\n\n*POSISI SALDO TERAKHIR:*\n- Cash: Rp ${newCashBalance.toLocaleString()}\n- Bank: Rp ${newSeabankBalance.toLocaleString()}\n- APK: Rp ${apkBalance.toLocaleString()}\n- QRIS: Rp ${qrisBalance.toLocaleString()}\n*Total Saldo: Rp ${totalSaldoAkhir.toLocaleString()}*\n\nTerima kasih.`;
 
       // PDF
       try {
@@ -304,7 +332,7 @@ export default function Closing() {
         docPdf.text(`Pengeluaran    : Rp ${realPengeluaran.toLocaleString()}`, 14, nextY + 14);
         let yt = nextY + 20;
         if (kasbonBaru > 0) { docPdf.text(`Piutang (Kasbon Baru): Rp ${kasbonBaru.toLocaleString()}`, 14, yt); yt += 6; }
-        if (kasbonDilunasi > 0) { docPdf.text(`Pelunasan Masuk: Rp ${kasbonDilunasi.toLocaleString()}`, 14, yt); yt += 6; }
+        if (kasbonDilunasi > 0) { docPdf.text(`Bayar/Cicil Kasbon : Rp ${kasbonDilunasi.toLocaleString()}${kasbonPayDetail}`, 14, yt); yt += 6; }
         docPdf.text(`Sistem Final   : Rp ${expectedCash.toLocaleString()}`, 14, yt); yt += 6;
         docPdf.text(`Fisik Laci     : Rp ${parseFloat(actualCash).toLocaleString()}`, 14, yt); yt += 6;
         const selisihStr = selisih > 0 ? `+Rp ${selisih.toLocaleString()}` : `-Rp ${Math.abs(selisih).toLocaleString()}`;
@@ -456,9 +484,22 @@ export default function Closing() {
                     </div>
                   )}
                   {kasbonDilunasi > 0 && (
-                    <div className="flex justify-between items-center text-sm">
-                      <span className="text-emerald-600 dark:text-emerald-400 font-bold text-xs">✓ Kasbon Dilunasi</span>
-                      <span className="text-emerald-600 dark:text-emerald-400 font-black">Rp {kasbonDilunasi.toLocaleString()}</span>
+                    <div className="space-y-1">
+                      <div className="flex justify-between items-center text-sm">
+                        <span className="text-emerald-600 dark:text-emerald-400 font-bold text-xs">✓ Bayar / Cicil Kasbon</span>
+                        <span className="text-emerald-600 dark:text-emerald-400 font-black">Rp {kasbonDilunasi.toLocaleString()}</span>
+                      </div>
+                      <div className="flex flex-wrap gap-2 pl-3 text-[10px] font-bold">
+                        {kasbonDilunasiCash > 0 && (
+                          <span className="text-emerald-600 dark:text-emerald-400">• Tunai (Laci): Rp {kasbonDilunasiCash.toLocaleString()}</span>
+                        )}
+                        {kasbonDilunasiTransfer > 0 && (
+                          <span className="text-blue-600 dark:text-blue-400">• Transfer (Bank): Rp {kasbonDilunasiTransfer.toLocaleString()}</span>
+                        )}
+                        {kasbonDilunasiQris > 0 && (
+                          <span className="text-purple-600 dark:text-purple-400">• QRIS: Rp {kasbonDilunasiQris.toLocaleString()}</span>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>

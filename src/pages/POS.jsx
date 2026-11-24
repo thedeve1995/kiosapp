@@ -8,9 +8,11 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { db } from '../lib/firebase';
-import { collection, onSnapshot, doc, writeBatch, addDoc, serverTimestamp, setDoc, query, where, updateDoc, increment } from 'firebase/firestore';
+import { collection, onSnapshot, doc, writeBatch, addDoc, serverTimestamp, setDoc, query, where, updateDoc, increment, getDoc } from 'firebase/firestore';
 import BalanceHistoryModal from '../components/BalanceHistoryModal';
-import { BALANCE_ORDER, BALANCE_META, getItemBalanceDeltas } from '../lib/balanceHistory';
+import KasbonModal from '../components/KasbonModal';
+import { BALANCE_ORDER, BALANCE_META, getItemBalanceDeltas, getTransactionBalanceDeltas } from '../lib/balanceHistory';
+import { payKasbonInstallment, buildKasbonPaymentReversal, getKasbonSummary } from '../lib/kasbon';
 
 // === Helper Functions ===
 function getItemProfit(item) {
@@ -79,6 +81,8 @@ export function printReceipt(log, useRawBT = false) {
         <div class="divider"></div>
         <div style="font-size: 10px;">Metode: ${methodLabel}</div>
         ${log.kasbonName ? `<div style="font-size: 10px;">Nama: ${log.kasbonName}</div>` : ''}
+        ${log.type === 'pelunasan_kasbon' && log.kasbonRemainingAfter != null ? `<div style="font-size: 10px;" class="bold">Status Kasbon: ${log.kasbonRemainingAfter === 0 ? 'LUNAS' : `Sisa Rp ${log.kasbonRemainingAfter.toLocaleString('id-ID')}`}</div>` : ''}
+        ${log.note ? `<div style="font-size: 10px;">Catatan: ${log.note}</div>` : ''}
         <div class="center" style="font-size: 10px; margin-top: 15px;">
           Terima Kasih
         </div>
@@ -124,7 +128,11 @@ export function printReceipt(log, useRawBT = false) {
     const totalText = leftRight('TOTAL', `Rp ${(log.total || 0).toLocaleString('id-ID')}`);
     
     const footer = `Metode: ${methodLabel}` +
-                   (log.kasbonName ? `\nNama: ${log.kasbonName}` : '') + '\n\n' +
+                   (log.kasbonName ? `\nNama: ${log.kasbonName}` : '') +
+                   (log.type === 'pelunasan_kasbon' && log.kasbonRemainingAfter != null
+                     ? `\nStatus: ${log.kasbonRemainingAfter === 0 ? 'LUNAS' : `Sisa Rp ${log.kasbonRemainingAfter.toLocaleString('id-ID')}`}`
+                     : '') +
+                   (log.note ? `\nCatatan: ${log.note}` : '') + '\n\n' +
                    center('Terima Kasih') + '\n' +
                    center('***') + '\n\n';
 
@@ -245,32 +253,49 @@ export default function POS() {
   }, [user, startDate, startTime, endDate, endTime]);
 
   const handleDirectCancelByOwner = async (log) => {
+    const isParentKasbon = (log.paymentMethod === 'kasbon' || log.kasbonStatus) && log.type !== 'pelunasan_kasbon';
+    if (isParentKasbon) {
+      const { paid } = getKasbonSummary(log);
+      if (paid > 0) {
+        alert(`Kasbon ini sudah memiliki cicilan Rp ${paid.toLocaleString('id-ID')}. Batalkan transaksi cicilannya terlebih dahulu di Riwayat sebelum membatalkan kasbon induk.`);
+        return;
+      }
+    }
+
     if (!window.confirm(`Konfirmasi Owner: Batalkan transaksi Rp ${(log.total || 0).toLocaleString()} ini langsung? Saldo dan stok akan dipulihkan otomatis.`)) return;
     setLoadingCancel(log.id);
     try {
       const batch = writeBatch(db);
       let cashDelta = 0, seabankDelta = 0, apkDelta = 0, qrisDelta = 0;
 
-      log.items?.forEach(item => {
-        const q = item.qty || 1;
-        const isExpenditure = log.type === 'expenditure';
+      if (log.type === 'pelunasan_kasbon') {
+        const d = getTransactionBalanceDeltas(log);
+        cashDelta -= d.cash;
+        seabankDelta -= d.seabank;
+        apkDelta -= d.apk;
+        qrisDelta -= d.qris;
+      } else {
+        log.items?.forEach(item => {
+          const q = item.qty || 1;
+          const isExpenditure = log.type === 'expenditure';
 
-        if (isExpenditure) {
-          cashDelta += (item.total || (item.price * q));
-        } else {
-          const { cash, seabank, apk, qris } = getItemBalanceDeltas(item, log.paymentMethod);
-          cashDelta -= cash;
-          seabankDelta -= seabank;
-          apkDelta -= apk;
-          qrisDelta -= qris;
-        }
+          if (isExpenditure) {
+            cashDelta += (item.total || (item.price * q));
+          } else {
+            const { cash, seabank, apk, qris } = getItemBalanceDeltas(item, log.paymentMethod);
+            cashDelta -= cash;
+            seabankDelta -= seabank;
+            apkDelta -= apk;
+            qrisDelta -= qris;
+          }
 
-        // Reversal Stock
-        if (item.type === 'stok' && item.firebaseId) {
-          const stockChange = item.action === 'restock' ? -q : q;
-          batch.update(doc(db, 'products', item.firebaseId), { stock: increment(stockChange) });
-        }
-      });
+          // Reversal Stock
+          if (item.type === 'stok' && item.firebaseId) {
+            const stockChange = item.action === 'restock' ? -q : q;
+            batch.update(doc(db, 'products', item.firebaseId), { stock: increment(stockChange) });
+          }
+        });
+      }
 
       batch.update(doc(db, 'balances', 'current'), {
         cash: increment(cashDelta),
@@ -287,16 +312,15 @@ export default function POS() {
         cancellationReason: 'Dibatalkan langsung oleh Owner di POS'
       };
 
-      if (log.paymentMethod === 'kasbon' || log.kasbonStatus) {
+      if (isParentKasbon) {
         updateData.kasbonStatus = 'batal';
       }
       if (log.type === 'pelunasan_kasbon' && log.kasbonLunasId) {
-        batch.update(doc(db, 'transactions', log.kasbonLunasId), {
-          kasbonStatus: 'belum_lunas',
-          pelunasanShift: null,
-          pelunasanUser: null,
-          dipelunasiPada: null
-        });
+        const parentRef = doc(db, 'transactions', log.kasbonLunasId);
+        const parentSnap = await getDoc(parentRef);
+        if (parentSnap.exists()) {
+          batch.update(parentRef, buildKasbonPaymentReversal(parentSnap.data(), log));
+        }
       }
 
       batch.update(doc(db, 'transactions', log.id), updateData);
@@ -311,6 +335,14 @@ export default function POS() {
   };
 
   const handleRequestCancellation = async (log) => {
+    const isParentKasbon = (log.paymentMethod === 'kasbon' || log.kasbonStatus) && log.type !== 'pelunasan_kasbon';
+    if (isParentKasbon) {
+      const { paid } = getKasbonSummary(log);
+      if (paid > 0) {
+        alert(`Kasbon ini sudah memiliki cicilan Rp ${paid.toLocaleString('id-ID')}. Batalkan transaksi cicilannya terlebih dahulu di Riwayat sebelum membatalkan kasbon induk.`);
+        return;
+      }
+    }
     if (user?.role === 'owner') {
       return handleDirectCancelByOwner(log);
     }
@@ -324,30 +356,20 @@ export default function POS() {
     finally { setLoadingCancel(null); }
   };
 
-  const handlePelunasan = async (kasbon) => {
-    if (kasbon.status === 'cancelled' || kasbon.kasbonStatus === 'batal') {
-      alert("Kasbon ini sudah dibatalkan.");
-      return;
+  const handlePayKasbon = async ({ kasbon, amount, paymentMethod: payMethod, note }) => {
+    const createdTx = await payKasbonInstallment({
+      db,
+      kasbonId: kasbon.id,
+      amount,
+      paymentMethod: payMethod,
+      user,
+      shift,
+      note,
+    });
+    if (createdTx?.isFullPayment && kasbonList.length <= 1) {
+      setKasbonModalOpen(false);
     }
-    if (kasbon.status === 'cancellation_requested') {
-      alert("Transaksi kasbon ini sedang dalam proses permintaan pembatalan.");
-      return;
-    }
-    if (!window.confirm(`Terima pelunasan Kasbon Tunai Rp ${kasbon.total?.toLocaleString()} dari ${kasbon.kasbonName || 'Konsumen'}?`)) return;
-    try {
-      const batch = writeBatch(db);
-      batch.update(doc(db, 'balances', 'current'), { cash: increment(kasbon.total) });
-      batch.set(doc(collection(db, 'transactions')), {
-        type: 'pelunasan_kasbon', status: 'success', user: user.name, shift, total: kasbon.total,
-        timestamp: serverTimestamp(), kasbonLunasId: kasbon.id,
-        items: [{ name: `Pelunasan Piutang: ${kasbon.kasbonName}`, action: 'pelunasan_kasbon', qty: 1, price: kasbon.total, total: kasbon.total }],
-        profit: 0
-      });
-      batch.update(doc(db, 'transactions', kasbon.id), { kasbonStatus: 'lunas', pelunasanShift: shift, pelunasanUser: user.name, dipelunasiPada: serverTimestamp() });
-      await batch.commit();
-      alert("Pelunasan berhasil diproses!");
-      if (kasbonList.length <= 1) setKasbonModalOpen(false);
-    } catch (e) { alert("Error: " + e.message); }
+    setTransactionSuccess(createdTx);
   };
 
   const filteredProducts = products
@@ -450,6 +472,7 @@ export default function POS() {
         paymentMethod,
         kasbonName: paymentMethod === 'kasbon' ? kasbonName : null,
         kasbonStatus: paymentMethod === 'kasbon' ? 'belum_lunas' : null,
+        ...(paymentMethod === 'kasbon' ? { kasbonPaid: 0, kasbonRemaining: totalCart, kasbonPayments: [] } : {}),
         status: 'success'
       };
 
@@ -1025,83 +1048,14 @@ export default function POS() {
       </AnimatePresence>
 
       {/* Kasbon Modal */}
-      <AnimatePresence>
-        {kasbonModalOpen && (
-          <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setKasbonModalOpen(false)} className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50" />
-            <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 28 }}
-              className="fixed bottom-0 left-0 right-0 max-h-[75vh] bg-white dark:bg-slate-800 rounded-t-3xl p-6 z-50 flex flex-col border-t border-slate-200/50 dark:border-slate-700/50"
-            >
-              <div className="flex justify-between items-center mb-5">
-                <h2 className="text-xl font-black text-slate-900 dark:text-white flex items-center gap-2">
-                  <ClipboardList size={22} className="text-amber-600 dark:text-amber-400" /> Daftar Kasbon
-                  <span className="bg-red-500 text-white text-[10px] font-black w-5 h-5 rounded-full flex items-center justify-center ml-1">{kasbonList.length}</span>
-                </h2>
-                <button onClick={() => setKasbonModalOpen(false)} className="w-9 h-9 rounded-xl bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-400"><X size={20} /></button>
-              </div>
-              <div className="flex-1 overflow-y-auto space-y-3">
-                {kasbonList.length === 0 ? (
-                  <p className="text-center text-slate-400 dark:text-slate-600 text-sm py-10 italic">Tidak ada kasbon aktif</p>
-                ) : kasbonList.map(k => {
-                  const isRequested = k.status === 'cancellation_requested';
-                  return (
-                    <div key={k.id} className="bg-slate-100/60 dark:bg-slate-900/60 rounded-2xl p-4 border border-slate-200/50 dark:border-slate-700/50 flex justify-between items-center gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <p className="font-black text-slate-900 dark:text-white text-sm">{k.kasbonName || 'Konsumen'}</p>
-                          {isRequested && (
-                            <span className="text-[9px] font-black bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded-full animate-pulse">
-                              Menunggu Batal
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-amber-600 dark:text-amber-400 font-black text-base mt-0.5">Rp {k.total?.toLocaleString()}</p>
-                        <p className="text-[10px] text-slate-400 dark:text-slate-600 mt-0.5">
-                          {k.timestamp ? new Date(k.timestamp.seconds * 1000).toLocaleDateString('id-ID') : '-'}
-                          {k.shift ? ` • Shift: ${k.shift}` : ''}
-                        </p>
-                        {k.items && (
-                          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 truncate">
-                            {k.items.map(it => it.name).join(', ')}
-                          </p>
-                        )}
-                        {isRequested && k.cancellationReason && (
-                          <p className="text-[10px] text-amber-600 dark:text-amber-400 italic mt-0.5 truncate">
-                            Alasan batal: {k.cancellationReason}
-                          </p>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        {!isRequested && (
-                          <button
-                            disabled={loadingCancel === k.id}
-                            onClick={() => handleRequestCancellation(k)}
-                            className="px-3 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 border border-red-500/20 rounded-xl text-xs font-bold transition-all active:scale-95 disabled:opacity-50"
-                            title="Batalkan Transaksi Kasbon"
-                          >
-                            {loadingCancel === k.id ? '...' : 'Batal'}
-                          </button>
-                        )}
-                        <button
-                          disabled={isRequested}
-                          onClick={() => handlePelunasan(k)}
-                          className={`px-4 py-2 rounded-xl text-xs font-black transition-all active:scale-95 flex items-center gap-1 ${
-                            isRequested
-                              ? 'bg-slate-200 dark:bg-slate-700 text-slate-400 cursor-not-allowed border border-transparent'
-                              : 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30'
-                          }`}
-                        >
-                          <CheckCircle2 size={14} className="inline mr-1" />Lunas
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
+      <KasbonModal
+        open={kasbonModalOpen}
+        onClose={() => setKasbonModalOpen(false)}
+        kasbonList={kasbonList}
+        loadingCancel={loadingCancel}
+        onRequestCancel={handleRequestCancellation}
+        onSubmitPayment={handlePayKasbon}
+      />
 
       {/* History Drawer */}
       <AnimatePresence>
@@ -1164,7 +1118,7 @@ export default function POS() {
                   const isRejected = log.cancellationRejected === true;
                   const isPelunasan = log.type === 'pelunasan_kasbon';
                   const isClosed = log.closed === true;
-                  const isFinalized = isCancelled || isRequested || isRejected || isPelunasan || log.type === 'expenditure' || log.type === 'adjustment' || isClosed;
+                  const isFinalized = isCancelled || isRequested || isRejected || log.type === 'expenditure' || log.type === 'adjustment' || isClosed;
 
                   return (
                   <div key={log.id} className={`rounded-xl px-4 py-3 border flex justify-between items-center gap-2 transition-all ${
@@ -1200,8 +1154,12 @@ export default function POS() {
                           </span>
                         )}
                         {isPelunasan && (
-                          <span className="inline-flex items-center gap-0.5 text-[8px] font-black bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.5 rounded-full border border-emerald-500/20">
-                            <CheckCircle2 size={9} /> Lunas
+                          <span className={`inline-flex items-center gap-0.5 text-[8px] font-black px-1.5 py-0.5 rounded-full border ${
+                            log.isPartial
+                              ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/20'
+                              : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                          }`}>
+                            <CheckCircle2 size={9} /> {log.isPartial ? 'Cicilan' : 'Lunas'}
                           </span>
                         )}
                         {log.type !== 'expenditure' && log.type !== 'adjustment' && (() => {
@@ -1222,6 +1180,12 @@ export default function POS() {
                         })()}
                       </div>
                       <p className={`text-xs font-bold truncate ${isCancelled ? 'text-slate-400 dark:text-slate-500 line-through' : 'text-slate-900 dark:text-white'}`}>{log.items?.map(it => it.name).join(', ')}</p>
+                      {isPelunasan && log.kasbonRemainingAfter != null && (
+                        <p className="text-[10px] font-bold text-blue-600/80 dark:text-blue-400/80 mt-0.5">
+                          {log.kasbonRemainingAfter === 0 ? 'Kasbon Lunas' : `Sisa kasbon: Rp ${log.kasbonRemainingAfter.toLocaleString('id-ID')}`}
+                          {log.note ? ` • ${log.note}` : ''}
+                        </p>
+                      )}
                       {getLogModal(log) > 0 && (
                         <p className="text-[10px] font-bold text-amber-600/80 dark:text-amber-400/80 mt-0.5">
                           Modal: Rp {getLogModal(log).toLocaleString()}
@@ -1268,8 +1232,27 @@ export default function POS() {
               <div className="w-16 h-16 bg-emerald-500/15 text-emerald-500 rounded-full flex items-center justify-center mx-auto mb-4">
                 <CheckCircle2 size={32} />
               </div>
-              <h3 className="text-xl font-black text-slate-900 dark:text-white mb-2">Transaksi Berhasil!</h3>
-              <p className="text-slate-500 text-sm mb-6">Total: Rp {(transactionSuccess.total || 0).toLocaleString('id-ID')}</p>
+              <h3 className="text-xl font-black text-slate-900 dark:text-white mb-2">
+                {transactionSuccess.type === 'pelunasan_kasbon'
+                  ? (transactionSuccess.isPartial ? 'Cicilan Kasbon Diterima!' : 'Kasbon Lunas!')
+                  : 'Transaksi Berhasil!'}
+              </h3>
+              <p className="text-slate-500 text-sm mb-2">Total: Rp {(transactionSuccess.total || 0).toLocaleString('id-ID')}</p>
+              {transactionSuccess.type === 'pelunasan_kasbon' && (
+                <div className="bg-slate-100 dark:bg-slate-900 rounded-2xl p-3 mb-5 text-xs space-y-1 border border-slate-200/60 dark:border-slate-700/60">
+                  <p className="font-bold text-slate-600 dark:text-slate-300">
+                    Metode: <span className="font-black text-indigo-600 dark:text-indigo-400 uppercase">{transactionSuccess.paymentMethod === 'transfer' ? 'Transfer Bank' : transactionSuccess.paymentMethod === 'qris' ? 'QRIS' : 'Tunai (Kas)'}</span>
+                  </p>
+                  {transactionSuccess.kasbonRemainingAfter != null && (
+                    <p className="font-bold text-slate-600 dark:text-slate-300">
+                      {transactionSuccess.kasbonRemainingAfter === 0
+                        ? <span className="text-emerald-600 dark:text-emerald-400 font-black">Status: LUNAS ✓</span>
+                        : <>Sisa Kasbon: <span className="text-amber-600 dark:text-amber-400 font-black">Rp {transactionSuccess.kasbonRemainingAfter.toLocaleString('id-ID')}</span></>}
+                    </p>
+                  )}
+                </div>
+              )}
+              {transactionSuccess.type !== 'pelunasan_kasbon' && <div className="mb-4" />}
               
               <div className="flex flex-col gap-2">
                 <button onClick={() => { printReceipt(transactionSuccess, true); setTransactionSuccess(null); }} className="w-full py-3 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-500 transition-all flex items-center justify-center gap-2 text-sm shadow-md shadow-indigo-500/20">
