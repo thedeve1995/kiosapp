@@ -1,12 +1,12 @@
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useStore } from '../store/useStore';
-import { Home, KeyRound, LayoutDashboard, LogOut } from 'lucide-react';
+import { Home, KeyRound, LayoutDashboard, LogOut, Sun, Moon } from 'lucide-react';
 import { auth } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function Layout() {
-  const { user, shift, setUser } = useStore();
+  const { user, shift, setUser, theme, toggleTheme } = useStore();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -25,16 +25,16 @@ export default function Layout() {
   const initials = user?.name?.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
 
   return (
-    <div className="min-h-screen bg-slate-900 flex flex-col font-sans">
+    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 flex flex-col font-sans">
       {/* Top Header */}
-      <header className="glass-dark border-b border-slate-800/80 px-4 py-3 flex justify-between items-center sticky top-0 z-40">
+      <header className="glass-dark border-b border-slate-200/80 dark:border-slate-800/80 px-4 py-3 flex justify-between items-center sticky top-0 z-40">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 bg-indigo-600 rounded-xl flex items-center justify-center shadow-md shadow-indigo-500/30">
             <span className="text-white font-black text-xs">K</span>
           </div>
           <div>
-            <h1 className="text-base font-black tracking-tight text-white leading-none">
-              Kios<span className="text-indigo-400">App</span>
+            <h1 className="text-base font-black tracking-tight text-slate-900 dark:text-white leading-none">
+              Kios<span className="text-indigo-600 dark:text-indigo-400">App</span>
             </h1>
             <p className="text-[10px] text-slate-500 font-medium leading-none mt-0.5">{shift}</p>
           </div>
@@ -42,16 +42,23 @@ export default function Layout() {
 
         <div className="flex items-center gap-2.5">
           <div className="text-right hidden sm:block">
-            <p className="text-sm font-bold text-white leading-none">{user?.name}</p>
+            <p className="text-sm font-bold text-slate-900 dark:text-white leading-none">{user?.name}</p>
             <p className="text-[10px] text-slate-500 uppercase tracking-wider mt-0.5">{user?.role}</p>
           </div>
           <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white font-black text-xs ring-2 ring-indigo-500/20 shadow-lg shadow-indigo-500/20">
             {initials}
           </div>
           <button
+            onClick={toggleTheme}
+            title={theme === 'dark' ? 'Mode Terang' : 'Mode Gelap'}
+            className="p-2 rounded-xl bg-white/80 dark:bg-slate-800/80 hover:bg-amber-500/15 dark:hover:bg-amber-500/15 border border-slate-200/50 dark:border-slate-700/50 hover:border-amber-500/30 text-slate-600 dark:text-slate-300 hover:text-amber-600 dark:hover:text-amber-400 transition-all active:scale-90"
+          >
+            {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+          </button>
+          <button
             onClick={handleLogout}
             title="Keluar"
-            className="p-2 rounded-xl bg-slate-800/80 hover:bg-red-500/15 border border-slate-700/50 hover:border-red-500/30 text-slate-400 hover:text-red-400 transition-all active:scale-90"
+            className="p-2 rounded-xl bg-white/80 dark:bg-slate-800/80 hover:bg-red-500/15 border border-slate-200/50 dark:border-slate-700/50 hover:border-red-500/30 text-slate-600 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-400 transition-all active:scale-90"
           >
             <LogOut size={17} />
           </button>
@@ -64,7 +71,7 @@ export default function Layout() {
       </main>
 
       {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 glass-dark border-t border-slate-800/80 z-40">
+      <nav className="fixed bottom-0 left-0 right-0 glass-dark border-t border-slate-200/80 dark:border-slate-800/80 z-40">
         <div className="flex items-stretch justify-around px-2 py-1.5 max-w-lg mx-auto">
           {tabs.map((tab) => {
             const isActive = location.pathname === tab.path ||
@@ -85,9 +92,9 @@ export default function Layout() {
                 <tab.icon
                   size={21}
                   strokeWidth={isActive ? 2.5 : 1.75}
-                  className={`relative z-10 transition-colors ${isActive ? 'text-indigo-400' : 'text-slate-500 group-hover:text-slate-300'}`}
+                  className={`relative z-10 transition-colors ${isActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-500 group-hover:text-slate-700 dark:group-hover:text-slate-300'}`}
                 />
-                <span className={`relative z-10 text-[9px] font-black uppercase tracking-wider transition-colors ${isActive ? 'text-indigo-400' : 'text-slate-600 group-hover:text-slate-400'}`}>
+                <span className={`relative z-10 text-[9px] font-black uppercase tracking-wider transition-colors ${isActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 dark:text-slate-600 group-hover:text-slate-600 dark:group-hover:text-slate-400'}`}>
                   {tab.label}
                 </span>
               </button>

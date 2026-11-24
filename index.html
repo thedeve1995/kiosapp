@@ -10,35 +10,51 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="mobile-web-app-capable" content="yes" />
     <title>Kios Finance</title>
+    <script>
+      // Apply saved theme before paint to avoid flash. Default = light.
+      try {
+        var s = JSON.parse(localStorage.getItem('kios-finance-storage'));
+        if (s && s.state && s.state.theme === 'dark') {
+          document.documentElement.classList.add('dark');
+        }
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
     <script>
+      var isLocalhost = ['localhost', '127.0.0.1', '[::1]'].indexOf(location.hostname) !== -1 || /^192\.168\./.test(location.hostname);
       if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js').then(reg => {
-            reg.onupdatefound = () => {
-              const installingWorker = reg.installing;
-              installingWorker.onstatechange = () => {
-                if (installingWorker.state === 'installed') {
-                  if (navigator.serviceWorker.controller) {
-                    // Update available
-                    window.dispatchEvent(new CustomEvent('swUpdateAvailable'));
+        if (isLocalhost) {
+          // Dev: service worker mengganggu HMR Vite. Jangan daftarkan, dan bersihkan yang lama.
+          navigator.serviceWorker.getRegistrations().then(function (regs) { regs.forEach(function (r) { r.unregister(); }); });
+          if (window.caches) caches.keys().then(function (keys) { keys.forEach(function (k) { caches.delete(k); }); });
+        } else {
+          window.addEventListener('load', () => {
+            navigator.serviceWorker.register('/sw.js').then(reg => {
+              reg.onupdatefound = () => {
+                const installingWorker = reg.installing;
+                installingWorker.onstatechange = () => {
+                  if (installingWorker.state === 'installed') {
+                    if (navigator.serviceWorker.controller) {
+                      // Update available
+                      window.dispatchEvent(new CustomEvent('swUpdateAvailable'));
+                    }
                   }
-                }
+                };
               };
-            };
-          }).catch(err => console.error('SW registration failed:', err));
-        });
+            }).catch(err => console.error('SW registration failed:', err));
+          });
 
-        let refreshing = false;
-        navigator.serviceWorker.addEventListener('controllerchange', () => {
-          if (!refreshing) {
-            window.location.reload();
-            refreshing = true;
-          }
-        });
+          let refreshing = false;
+          navigator.serviceWorker.addEventListener('controllerchange', () => {
+            if (!refreshing) {
+              window.location.reload();
+              refreshing = true;
+            }
+          });
+        }
       }
     </script>
   </body>

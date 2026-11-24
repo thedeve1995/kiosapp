@@ -43,21 +43,21 @@ export default function RegisterOwner() {
     }
   };
 
-  if (checking) return <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white font-bold tracking-widest animate-pulse">MEMERIKSA SISTEM...</div>;
+  if (checking) return <div className="min-h-screen flex items-center justify-center bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white font-bold tracking-widest animate-pulse">MEMERIKSA SISTEM...</div>;
 
   if (exists) return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 text-center">
+    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 flex items-center justify-center p-4 text-center">
        <div className="max-w-md bg-white p-8 rounded-3xl shadow-2xl">
           <ShieldCheck size={64} className="mx-auto text-red-500 mb-4" />
           <h2 className="text-2xl font-black text-slate-800 mb-2">Akses Dilarang</h2>
           <p className="text-slate-500 font-medium leading-relaxed">Sistem sudah memiliki Owner utama. Untuk menambah user, silakan minta Owner saat ini mendaftarkan Anda via Dashboard Admin.</p>
-          <button onClick={() => navigate('/login')} className="mt-8 bg-slate-900 text-white px-6 py-3 rounded-xl font-bold hover:bg-slate-800">Kembali ke Login</button>
+          <button onClick={() => navigate('/login')} className="mt-8 bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white px-6 py-3 rounded-xl font-bold hover:bg-white dark:hover:bg-slate-800">Kembali ke Login</button>
        </div>
     </div>
   );
 
   return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 flex items-center justify-center p-4">
       <div className="w-full max-w-md bg-white rounded-3xl p-8 shadow-2xl">
         <h1 className="text-3xl font-black text-slate-900 mb-2 italic">SETUP <span className="text-blue-600">OWNER</span></h1>
         <p className="text-slate-500 mb-8 font-medium">Langkah pertama: Daftarkan akun Owner Anda.</p>
@@ -79,7 +79,7 @@ export default function RegisterOwner() {
               value={form.whatsapp} onChange={e => setForm({...form, whatsapp: e.target.value})}
               className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
             />
-            <p className="text-[10px] text-slate-400 mt-1 ml-1">* Nomor ini akan menjadi tujuan pengiriman laporan closing shift.</p>
+            <p className="text-[10px] text-slate-600 dark:text-slate-400 mt-1 ml-1">* Nomor ini akan menjadi tujuan pengiriman laporan closing shift.</p>
           </div>
           <input
             type="password" required placeholder="Kata Sandi (Min. 6 Karakter)"

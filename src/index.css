@@ -9,17 +9,25 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
+  /* Light is the default theme */
   body {
-    background-color: #0f172a;
-    color: #f8fafc;
+    background-color: #f1f5f9; /* slate-100 */
+    color: #0f172a;            /* slate-900 */
     min-height: 100vh;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+  .dark body {
+    background-color: #0f172a; /* slate-900 */
+    color: #f8fafc;            /* slate-50 */
   }
   * { box-sizing: border-box; }
 
   ::-webkit-scrollbar { width: 4px; height: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
-  ::-webkit-scrollbar-thumb:hover { background: #475569; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+  .dark ::-webkit-scrollbar-thumb { background: #334155; }
+  .dark ::-webkit-scrollbar-thumb:hover { background: #475569; }
 
   input[type=number]::-webkit-inner-spin-button,
   input[type=number]::-webkit-outer-spin-button {
@@ -38,27 +46,37 @@
   .glow-amber  { box-shadow: 0 0 24px rgba(245, 158, 11, 0.35); }
   .glow-rose   { box-shadow: 0 0 24px rgba(244, 63, 94, 0.35); }
 
+  /* Translucent surfaces — light defaults, dark overrides */
   .glass {
-    background: rgba(30, 41, 59, 0.75);
+    background: rgba(255, 255, 255, 0.7);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
   }
   .glass-dark {
-    background: rgba(15, 23, 42, 0.9);
+    background: rgba(255, 255, 255, 0.85);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
   }
+  .dark .glass { background: rgba(30, 41, 59, 0.75); }
+  .dark .glass-dark { background: rgba(15, 23, 42, 0.9); }
 
   .animate-spin-slow { animation: spin 3s linear infinite; }
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
   .card-dark {
-    background-color: #1e293b;
-    border: 1px solid rgba(71, 85, 105, 0.3);
+    background-color: #ffffff;
+    border: 1px solid rgba(148, 163, 184, 0.3);
     border-radius: 1rem;
   }
   .card-dark:hover {
     border-color: rgba(99, 102, 241, 0.4);
     box-shadow: 0 8px 32px rgba(99, 102, 241, 0.1);
+  }
+  .dark .card-dark {
+    background-color: #1e293b;
+    border-color: rgba(71, 85, 105, 0.3);
+  }
+  .dark .card-dark:hover {
+    border-color: rgba(99, 102, 241, 0.4);
   }
 }

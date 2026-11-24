@@ -33,3 +33,6 @@ dist-ssr
 # Dump files
 *.dump
 products_dump.txt
+
+# Local AI tool config
+.claude/

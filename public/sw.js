@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kios-finance-v2';
+const CACHE_NAME = 'kios-finance-v4';
 const urlsToCache = [
   '/',
   '/index.html'
@@ -35,32 +35,17 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  if (event.request.mode === 'navigate' || (event.request.headers.get('accept') && event.request.headers.get('accept').includes('text/html'))) {
-    event.respondWith(
-      fetch(event.request)
-        .then(response => {
-          return caches.open(CACHE_NAME).then(cache => {
-            cache.put(event.request, response.clone());
-            return response;
-          });
-        })
-        .catch(() => {
-          return caches.match(event.request);
-        })
-    );
-  } else {
-    event.respondWith(
-      caches.match(event.request)
-        .then(response => {
-          return response || fetch(event.request).then(fetchRes => {
-            return caches.open(CACHE_NAME).then(cache => {
-              cache.put(event.request, fetchRes.clone());
-              return fetchRes;
-            });
-          });
-        })
-    );
-  }
+  // Network-first: selalu ambil versi terbaru saat online supaya kode tidak basi.
+  // Cache hanya dipakai sebagai fallback ketika offline.
+  event.respondWith(
+    fetch(event.request)
+      .then(response => {
+        const copy = response.clone();
+        caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy)).catch(() => {});
+        return response;
+      })
+      .catch(() => caches.match(event.request))
+  );
 });
 
 self.addEventListener('message', (event) => {

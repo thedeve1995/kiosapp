@@ -58,7 +58,7 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 relative overflow-hidden font-sans">
+    <div className="min-h-screen bg-slate-100 dark:bg-slate-900 flex items-center justify-center p-4 relative overflow-hidden font-sans">
       {/* Background ambient glow */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-48 -left-48 w-96 h-96 bg-indigo-600/20 rounded-full blur-3xl" />
@@ -87,20 +87,20 @@ export default function Login() {
           >
             <Store size={30} className="text-white" />
           </motion.div>
-          <h1 className="text-3xl font-black text-white tracking-tight">
-            Kios<span className="text-indigo-400">App</span>
+          <h1 className="text-3xl font-black text-slate-900 dark:text-white tracking-tight">
+            Kios<span className="text-indigo-600 dark:text-indigo-400">App</span>
           </h1>
           <p className="text-slate-500 text-sm mt-1.5 font-medium">Sistem Manajemen Kios</p>
         </div>
 
         {/* Login Card */}
-        <div className="bg-slate-800/60 backdrop-blur-xl border border-slate-700/50 rounded-3xl p-6 shadow-2xl shadow-black/40">
+        <div className="bg-white/60 dark:bg-slate-800/60 backdrop-blur-xl border border-slate-200/50 dark:border-slate-700/50 rounded-3xl p-6 shadow-2xl shadow-black/40">
           {/* Error message */}
           {err && (
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
-              className="bg-red-500/10 border border-red-500/30 text-red-400 p-3 rounded-xl mb-4 text-sm font-semibold"
+              className="bg-red-500/10 border border-red-500/30 text-red-600 dark:text-red-400 p-3 rounded-xl mb-4 text-sm font-semibold"
             >
               {err}
             </motion.div>
@@ -115,7 +115,7 @@ export default function Login() {
                 required
                 value={email}
                 onChange={e => setEmail(e.target.value)}
-                className="w-full px-4 py-3 bg-slate-900/80 border border-slate-700 rounded-xl text-white placeholder-slate-700 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-medium text-sm"
+                className="w-full px-4 py-3 bg-slate-100/80 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white placeholder-slate-300 dark:placeholder-slate-700 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-medium text-sm"
                 placeholder="email@kios.com"
               />
             </div>
@@ -129,13 +129,13 @@ export default function Login() {
                   required
                   value={password}
                   onChange={e => setPassword(e.target.value)}
-                  className="w-full px-4 py-3 bg-slate-900/80 border border-slate-700 rounded-xl text-white placeholder-slate-700 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-medium text-sm pr-12"
+                  className="w-full px-4 py-3 bg-slate-100/80 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-white placeholder-slate-300 dark:placeholder-slate-700 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-medium text-sm pr-12"
                   placeholder="••••••••"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-600 hover:text-slate-300 transition-colors rounded-lg"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 dark:text-slate-600 hover:text-slate-700 dark:hover:text-slate-300 transition-colors rounded-lg"
                 >
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
@@ -158,12 +158,12 @@ export default function Login() {
 
           {/* Setup owner */}
           {noUsers && (
-            <div className="mt-5 pt-5 border-t border-slate-700/50">
+            <div className="mt-5 pt-5 border-t border-slate-200/50 dark:border-slate-700/50">
               <div className="bg-indigo-500/10 border border-indigo-500/20 p-4 rounded-2xl text-center">
-                <p className="text-xs text-indigo-400 font-bold mb-3 italic">Sistem terdeteksi baru / kosong.</p>
+                <p className="text-xs text-indigo-600 dark:text-indigo-400 font-bold mb-3 italic">Sistem terdeteksi baru / kosong.</p>
                 <button
                   onClick={() => navigate('/setup-owner')}
-                  className="w-full bg-slate-700 hover:bg-slate-600 text-white text-xs font-black py-2.5 rounded-xl transition-all uppercase tracking-widest"
+                  className="w-full bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-900 dark:text-white text-xs font-black py-2.5 rounded-xl transition-all uppercase tracking-widest"
                 >
                   Daftar Owner Utama
                 </button>
@@ -172,7 +172,7 @@ export default function Login() {
           )}
         </div>
 
-        <p className="text-center text-slate-700 text-[10px] font-bold uppercase tracking-widest mt-6">
+        <p className="text-center text-slate-300 dark:text-slate-700 text-[10px] font-bold uppercase tracking-widest mt-6">
           Kiosk Management System v1.0
         </p>
       </motion.div>

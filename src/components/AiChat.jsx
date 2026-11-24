@@ -94,7 +94,7 @@ export default function AiChat({ transactions, products, balances, closings }) {
                 </div>
                 <div>
                   <h3 className="font-black text-white text-sm tracking-wide">Asisten AI</h3>
-                  <p className="text-violet-200 text-[10px] font-medium">GPT • Kios Finance</p>
+                  <p className="text-violet-200 text-[10px] font-medium">Gemini • Kios Finance</p>
                 </div>
               </div>
               <div className="flex items-center gap-1">

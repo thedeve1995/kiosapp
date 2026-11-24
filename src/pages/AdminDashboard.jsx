@@ -1,40 +1,69 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useStore } from '../store/useStore';
 import { db } from '../lib/firebase';
-import { collection, onSnapshot, doc, setDoc, query, where, serverTimestamp, addDoc, updateDoc, increment, writeBatch, deleteDoc, getDocs, orderBy, limit } from 'firebase/firestore';
+import { collection, onSnapshot, doc, setDoc, query, where, serverTimestamp, addDoc, updateDoc, increment, writeBatch, deleteDoc, getDocs, orderBy, limit, Timestamp } from 'firebase/firestore';
 import { initializeApp, getApp, getApps } from 'firebase/app';
 import { createUserWithEmailAndPassword, getAuth } from 'firebase/auth';
 import { useNavigate } from 'react-router-dom';
 import { 
-  BarChart3, TrendingUp, AlertOctagon, History, UserPlus, Users, 
+  BarChart3, TrendingUp, TrendingDown, AlertOctagon, History, UserPlus, Users,
   Loader2, Package, Edit3, Trash2, Search, Plus, Save, X, Check,
   ChevronDown, ChevronUp, Wallet, CircleDollarSign, Calendar, ListChecks, FileCheck2, LayoutDashboard,
-  ShieldCheck, ClipboardList
+  ShieldCheck, ClipboardList, Printer
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-// import AiChat from '../components/AiChat';
+import { printClosingRawBT } from '../lib/printClosingRawBT';
+
 
 // === Helper Functions ===
 
-/** Hitung profit dari satu transaksi (berdasarkan items atau fallback ke t.profit) */
+/** Hitung profit dari satu transaksi.
+ *  Menghitung secara dinamis dari total dikurangi modal item.
+ */
 function calcTransactionProfit(t) {
+  if (t.type === 'expenditure' || t.type === 'adjustment' || t.type === 'pelunasan_kasbon') return 0;
+
+  if (t.items && t.items.length > 0) {
+    const totalModal = t.items.reduce((sum, it) => {
+      const q = Number(it.qty) || 1;
+      const cost = it.action === 'tarik'
+        ? (Number(it.nominal) || Number(it.costPrice) || 0)
+        : (Number(it.costPrice) || Number(it.nominal) || 0);
+      return sum + (cost * q);
+    }, 0);
+    return (Number(t.total) || 0) - totalModal;
+  }
+  return Number(t.profit) || 0;
+}
+
+/** Hitung modal (HPP/cost) dari satu transaksi. */
+function calcTransactionModal(t) {
+  if (t.type === 'expenditure' || t.type === 'adjustment' || t.type === 'pelunasan_kasbon') return 0;
+
   if (t.items && t.items.length > 0) {
     return t.items.reduce((sum, it) => {
       const q = Number(it.qty) || 1;
-      if (it.action === 'tarik') return sum + ((Number(it.fee) || 0) * q);
-      const cost = Number(it.costPrice) || 0;
-      return sum + (cost > 0 ? (Number(it.price || 0) - cost) * q : 0);
+      const cost = it.action === 'tarik'
+        ? (Number(it.nominal) || Number(it.costPrice) || 0)
+        : (Number(it.costPrice) || Number(it.nominal) || 0);
+      return sum + (cost * q);
     }, 0);
   }
-  return Number(t.profit) || 0;
+
+  if (typeof t.total === 'number' && typeof t.profit === 'number') {
+    return Math.max(0, t.total - t.profit);
+  }
+  return 0;
 }
 
 /** Hitung profit per item (untuk kategori breakdown) */
 function calcItemProfit(it) {
   const q = Number(it.qty) || 1;
-  if (it.action === 'tarik') return (Number(it.fee) || 0) * q;
-  const cost = Number(it.costPrice) || 0;
-  return cost > 0 ? (Number(it.price || 0) - cost) * q : 0;
+  const price = Number(it.price) || 0;
+  const cost = it.action === 'tarik'
+    ? (Number(it.nominal) || Number(it.costPrice) || 0)
+    : (Number(it.costPrice) || Number(it.nominal) || 0);
+  return (price - cost) * q;
 }
 
 const firebaseConfig = {
@@ -72,11 +101,12 @@ export default function AdminDashboard() {
   const [showLogs, setShowLogs] = useState(true);
 
   const [reportRange, setReportRange] = useState('Today');
-  const [balances, setBalances] = useState({ cash: 0, apk: 0, seabank: 0, modalShift: 0 });
-  const [balForm, setBalForm] = useState({ cash: '', apk: '', seabank: '', modalShift: '' });
+  const [balances, setBalances] = useState({ cash: 0, apk: 0, seabank: 0, qris: 0, modalShift: 0 });
+  const [balForm, setBalForm] = useState({ cash: '', apk: '', seabank: '', qris: '', modalShift: '' });
   const [loadingBal, setLoadingBal] = useState(false);
   const [closings, setClosings] = useState([]);
   const [selectedClosing, setSelectedClosing] = useState(null);
+  const [closingFilter, setClosingFilter] = useState({ start: '', end: '' });
   
   const [penyesuaianModal, setPenyesuaianModal] = useState(false);
   const [penyesuaianForm, setPenyesuaianForm] = useState({ jenisSistem: 'seabank', jenisAksi: 'tambah', nominal: '', keterangan: 'Penyesuaian Saldo' });
@@ -117,7 +147,7 @@ export default function AdminDashboard() {
     if (user?.role !== 'owner') return;
     
     // Perbaikan batas limit harian Firebase Reads
-    const qTrans = query(collection(db, 'transactions'), orderBy('timestamp', 'desc'), limit(500));
+    const qTrans = query(collection(db, 'transactions'), orderBy('timestamp', 'desc'), limit(3000));
     const unsubTrans = onSnapshot(qTrans, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setTransactions(data.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0)));
@@ -129,7 +159,7 @@ export default function AdminDashboard() {
       if (d.exists()) {
         const b = d.data();
         setBalances(prev => ({ ...prev, ...b }));
-        setBalForm({ cash: b.cash || 0, apk: b.apk || 0, seabank: b.seabank || 0, modalShift: b.modalShift || 0 });
+        setBalForm({ cash: b.cash || 0, apk: b.apk || 0, seabank: b.seabank || 0, qris: b.qris || 0, modalShift: b.modalShift || 0 });
       }
     });
     return () => { unsubTrans(); unsubProd(); unsubBal(); };
@@ -142,18 +172,52 @@ export default function AdminDashboard() {
   const existingCategories = products.map(p => p.category).filter(Boolean);
   const allCategories = Array.from(new Set([...defaultCategories, ...existingCategories]));
 
-  const activeTrans = useMemo(() => transactions.filter(t => !['adjustment', 'expenditure'].includes(t.type) && t.status !== 'cancelled'), [transactions]);
+  const cutoff30 = useMemo(() => { const d = new Date(); d.setDate(d.getDate() - 30); d.setHours(0,0,0,0); return d; }, []);
+  const inLast30 = (t) => { const ts = t.timestamp?.seconds ? new Date(t.timestamp.seconds * 1000) : null; return ts ? ts >= cutoff30 : false; };
+
+  const activeTrans = useMemo(() => transactions.filter(t => !['adjustment', 'expenditure'].includes(t.type) && t.status !== 'cancelled' && inLast30(t)), [transactions, cutoff30]);
   const totalPemasukan = useMemo(() => activeTrans.reduce((s, t) => s + (t.total || 0), 0), [activeTrans]);
-  const totalPengeluaran = useMemo(() => transactions.filter(t => t.type === 'expenditure' && t.status !== 'cancelled').reduce((s, t) => s + (t.total || 0), 0), [transactions]);
+  const totalModalOut = useMemo(() => activeTrans.reduce((s, t) => s + calcTransactionModal(t), 0), [activeTrans]);
   const totalLaba = useMemo(() => activeTrans.reduce((s, t) => s + calcTransactionProfit(t), 0), [activeTrans]);
-  const totalBatal = useMemo(() => transactions.filter(t => t.status === 'cancelled').length, [transactions]);
+  const totalBatal = useMemo(() => transactions.filter(t => t.status === 'cancelled' && inLast30(t)).length, [transactions, cutoff30]);
   const pendingCancellations = transactions.filter(t => t.status === 'pending_cancellation' || t.status === 'cancellation_requested');
-  
+
+  // Filter closing berdasarkan rentang tanggal (kosong = semua)
+  const filteredClosings = useMemo(() => {
+    const { start, end } = closingFilter;
+    if (!start && !end) return closings;
+    const startMs = start ? new Date(`${start}T00:00:00`).getTime() : -Infinity;
+    const endMs = end ? new Date(`${end}T23:59:59`).getTime() : Infinity;
+    return closings.filter(c => {
+      const ms = c.timestamp?.seconds ? c.timestamp.seconds * 1000 : 0;
+      return ms >= startMs && ms <= endMs;
+    });
+  }, [closings, closingFilter]);
+
+  // Agregat laba & selisih dari closing (mengikuti filter tanggal)
+  // labaKotorClosing = keuntungan TANPA dikurangi selisih
+  // totalSelisih = net semua selisih (minus mengurangi, plus menambah)
+  const labaKotorClosing = useMemo(() => filteredClosings.reduce((s, c) => s + (Number(c.totalProfit) || 0), 0), [filteredClosings]);
+  const totalSelisih = useMemo(() => filteredClosings.reduce((s, c) => s + (Number(c.selisih) || 0), 0), [filteredClosings]);
+  const labaBersihClosing = labaKotorClosing + totalSelisih;
+
+  const todayStr = new Date().toLocaleDateString('id-ID');
+  const displayQris = balances.lastQrisResetDate === todayStr ? (Number(balances.qris) || 0) : 0;
+
+  const totalSaldo = (Number(balances.cash) || 0) + (Number(balances.apk) || 0) + (Number(balances.seabank) || 0) + displayQris;
+
   const stats = [
-    { title: 'Total Pemasukan', value: `Rp ${totalPemasukan.toLocaleString()}`, icon: TrendingUp, color: 'text-blue-500', bg: 'bg-blue-50' },
-    { title: 'Total Pengeluaran', value: `Rp ${totalPengeluaran.toLocaleString()}`, icon: X, color: 'text-red-600', bg: 'bg-red-50' },
-    { title: 'Total Laba', value: `Rp ${totalLaba.toLocaleString()}`, icon: CircleDollarSign, color: 'text-emerald-500', bg: 'bg-emerald-50' },
-    { title: 'Void / Batal', value: totalBatal.toString(), icon: AlertOctagon, color: 'text-red-500', bg: 'bg-red-50' }
+    { title: 'Total Pemasukan', value: `Rp ${totalPemasukan.toLocaleString()}`, icon: TrendingUp, grad: 'from-blue-500 to-indigo-500', glow: 'shadow-blue-500/30' },
+    { title: 'Total Modal', value: `Rp ${totalModalOut.toLocaleString()}`, icon: TrendingDown, grad: 'from-rose-500 to-red-500', glow: 'shadow-rose-500/30' },
+    { title: 'Total Laba', value: `Rp ${totalLaba.toLocaleString()}`, icon: CircleDollarSign, grad: 'from-emerald-500 to-teal-500', glow: 'shadow-emerald-500/30' },
+    { title: 'Void / Batal', value: totalBatal.toString(), icon: AlertOctagon, grad: 'from-amber-500 to-orange-500', glow: 'shadow-amber-500/30' }
+  ];
+
+  const subStats = [
+    { title: 'Transaksi', value: activeTrans.length.toLocaleString(), icon: ListChecks },
+    { title: 'Produk', value: products.length.toLocaleString(), icon: Package },
+    { title: 'Karyawan', value: employees.length.toLocaleString(), icon: Users },
+    { title: 'Total Saldo', value: `Rp ${totalSaldo.toLocaleString()}`, icon: Wallet }
   ];
 
   // Report filter by time range
@@ -276,7 +340,7 @@ export default function AdminDashboard() {
     e.preventDefault();
     setLoadingBal(true);
     try {
-      const newBalances = { cash: Number(balForm.cash), apk: Number(balForm.apk), seabank: Number(balForm.seabank), modalShift: Number(balForm.modalShift) };
+      const newBalances = { cash: Number(balForm.cash), apk: Number(balForm.apk), seabank: Number(balForm.seabank), qris: Number(balForm.qris), modalShift: Number(balForm.modalShift) };
       await setDoc(doc(db, 'balances', 'current'), newBalances, { merge: true });
       await addDoc(collection(db, 'transactions'), { type: 'adjustment', user: user.name, role: user.role, previous: balances, current: newBalances, total: 0, timestamp: serverTimestamp(), shift: 'Manual Audit' });
       alert('Saldo berhasil diperbarui!');
@@ -344,41 +408,60 @@ export default function AdminDashboard() {
     try {
       const batch = writeBatch(db);
 
-      // Hitung delta reversal untuk setiap item
-      let cashDelta = 0, seabankDelta = 0, apkDelta = 0;
+      let cashDelta = 0, seabankDelta = 0, apkDelta = 0, qrisDelta = 0;
 
       log.items?.forEach(item => {
         const q = item.qty || 1;
-        const totalFee = (item.fee || 0) * q;
-        const totalNominal = (item.nominal || 0) * q;
         const isExpenditure = log.type === 'expenditure';
 
-        // 1. Reversal Balance Logic (kebalikan dari transaksi asli)
         if (isExpenditure) {
           cashDelta += (item.total || (item.price * q));
         } else {
-          if (item.action === 'tarik') {
-            const cashEffect = totalNominal - (item.feePaidVia === 'cash' ? totalFee : 0);
-            cashDelta += cashEffect;
-          } else {
-            if (log.paymentMethod === 'transfer') {
-              seabankDelta -= (item.price * q);
+          // ==========================================
+          // MIRROR OF getItemBalanceDeltas (POS.jsx)
+          // ==========================================
+          const fee = (item.fee || 0) * q;
+          const nominal = (item.nominal || 0) * q;
+          const price = item.price * q;
+          const cost = (Number(item.costPrice) || 0) * q;
+          let iCash = 0, iSeabank = 0, iApk = 0, iQris = 0;
+          const pm = log.paymentMethod;
+
+          if (pm !== 'kasbon') {
+            if (item.action === 'tarik') {
+              iCash -= nominal;
+              if (item.feePaidVia === 'cash') iCash += fee;
+              else if (item.feePaidVia === 'qris') iQris += fee;
+            } else if (item.type === 'stok') {
+              if (pm === 'transfer') iSeabank += price;
+              else if (pm === 'qris') iQris += price;
+              else iCash += price;
             } else {
-              cashDelta -= (item.price * q);
+              if (pm === 'transfer') iSeabank += price;
+              else if (pm === 'qris') iQris += price;
+              else iCash += price;
+            }
+          } else {
+            if (item.action === 'tarik') iCash -= nominal;
+          }
+
+          if (item.type === 'jasa' || item.type === 'saldo') {
+            if (item.action === 'transfer') iSeabank -= cost;
+            else if (item.action === 'tarik') {
+              if (pm === 'qris') iQris += nominal;
+              else iSeabank += nominal;
+              
+              if (pm !== 'kasbon' && item.feePaidVia === 'transfer') iSeabank += fee;
+            } else {
+              iApk -= cost;
             }
           }
-        }
-
-        // 2. Reversal service balance (App/Bank)
-        if (item.type === 'jasa' || item.type === 'saldo') {
-          if (item.action === 'transfer') {
-            seabankDelta += (Number(item.costPrice || item.nominal) * q);
-          } else if (item.action === 'tarik') {
-            const bankReceived = totalNominal + (item.feePaidVia === 'transfer' ? totalFee : 0);
-            seabankDelta -= bankReceived;
-          } else {
-            apkDelta += (Number(item.costPrice || item.nominal) * q);
-          }
+          
+          // Reversal means subtracting the forward delta
+          cashDelta -= iCash;
+          seabankDelta -= iSeabank;
+          apkDelta -= iApk;
+          qrisDelta -= iQris;
         }
 
         // 3. Reversal Stock
@@ -393,8 +476,21 @@ export default function AdminDashboard() {
         cash: increment(cashDelta),
         seabank: increment(seabankDelta),
         apk: increment(apkDelta),
+        qris: increment(qrisDelta)
       });
-      batch.update(doc(db, 'transactions', log.id), { status: 'cancelled', approvedBy: user.name, approvedAt: serverTimestamp() });
+      const updateData = { status: 'cancelled', approvedBy: user.name, approvedAt: serverTimestamp() };
+      if (log.paymentMethod === 'kasbon' || log.kasbonStatus) {
+        updateData.kasbonStatus = 'batal';
+      }
+      if (log.type === 'pelunasan_kasbon' && log.kasbonLunasId) {
+        batch.update(doc(db, 'transactions', log.kasbonLunasId), {
+          kasbonStatus: 'belum_lunas',
+          pelunasanShift: null,
+          pelunasanUser: null,
+          dipelunasiPada: null
+        });
+      }
+      batch.update(doc(db, 'transactions', log.id), updateData);
       await batch.commit();
       alert("Pembatalan Berhasil!");
     } catch (e) { alert("Gagal: " + e.message); }
@@ -450,13 +546,18 @@ export default function AdminDashboard() {
       const q = query(collection(db, 'transactions'), where('closed', '!=', true));
       const snap = await getDocs(q);
       snap.docs.forEach(d => {
-        batch.update(d.ref, { status: 'voided_by_audit', voidedAt: serverTimestamp(), voidedBy: user.name });
+        const updateObj = { status: 'voided_by_audit', voidedAt: serverTimestamp(), voidedBy: user.name };
+        if (d.data().kasbonStatus) {
+          updateObj.kasbonStatus = 'batal';
+        }
+        batch.update(d.ref, updateObj);
       });
 
       // 2. Hitung Rekapitulasi Akhir
       let netCash = Number(auditData.initialCash);
       let netApk = Number(auditData.initialApk);
       let netSeabank = Number(auditData.initialSeabank);
+      let netQris = Number(auditData.initialQris ?? displayQris ?? 0);
 
       // Digital Re-input processing
       auditData.digitalTrans.forEach(t => {
@@ -513,14 +614,13 @@ export default function AdminDashboard() {
             timestamp: serverTimestamp()
           });
         }
-        
         // Update Stock
         batch.update(doc(db, 'products', p.id), { stock: Number(adjust.end) });
       });
 
-      // 3. Update Global Balances
+      // 3. Finalize Global Balances
       const balRef = doc(db, 'balances', 'current');
-      batch.update(balRef, { cash: netCash, apk: netApk, seabank: netSeabank });
+      batch.update(balRef, { cash: netCash, apk: netApk, seabank: netSeabank, qris: netQris });
 
       // 4. Log the Audit Header
       const auditLogRef = doc(collection(db, 'transactions'));
@@ -529,8 +629,8 @@ export default function AdminDashboard() {
         status: 'success',
         user: user.name,
         timestamp: serverTimestamp(),
-        previousBalances: { cash: balances.cash, apk: balances.apk, seabank: balances.seabank },
-        auditBalances: { cash: netCash, apk: netApk, seabank: netSeabank }
+        previousBalances: { cash: balances.cash, apk: balances.apk, seabank: balances.seabank, qris: displayQris },
+        auditBalances: { cash: netCash, apk: netApk, seabank: netSeabank, qris: netQris }
       });
 
       await batch.commit();
@@ -608,19 +708,19 @@ export default function AdminDashboard() {
   ];
 
   return (
-    <div className="flex flex-col md:flex-row min-h-full bg-slate-900 overflow-hidden">
+    <div className="flex flex-col md:flex-row min-h-full bg-slate-100 dark:bg-slate-900 md:overflow-hidden">
       
       {/* Sidebar Navigation */}
-      <div className="md:w-60 bg-slate-900 border-b md:border-b-0 md:border-r border-slate-800/80 shrink-0 flex flex-row md:flex-col p-3 md:p-5 overflow-x-auto no-scrollbar gap-2 md:gap-3 z-10 w-full">
+      <div className="md:w-60 bg-slate-100 dark:bg-slate-900 border-b md:border-b-0 md:border-r border-slate-200/80 dark:border-slate-800/80 shrink-0 flex flex-row md:flex-col p-3 md:p-5 overflow-x-auto no-scrollbar gap-2 md:gap-3 z-10 w-full">
          <div className="hidden md:flex justify-between items-center mb-6">
            <div>
-             <h2 className="text-xl font-black text-white tracking-tight">Owner<span className="text-indigo-400">.</span></h2>
+             <h2 className="text-xl font-black text-slate-900 dark:text-white tracking-tight">Owner<span className="text-indigo-600 dark:text-indigo-400">.</span></h2>
              <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest mt-0.5">Control Panel</p>
            </div>
          </div>
          {user?.whatsapp && (
            <div className="hidden md:flex mb-4 bg-indigo-500/10 border border-indigo-500/20 px-3 py-2 rounded-xl items-center gap-2">
-             <span className="text-[10px] font-black uppercase text-indigo-400">WA: {user.whatsapp}</span>
+             <span className="text-[10px] font-black uppercase text-indigo-600 dark:text-indigo-400">WA: {user.whatsapp}</span>
            </div>
          )}
          <div className="flex md:flex-col gap-2">
@@ -631,27 +731,69 @@ export default function AdminDashboard() {
                  className={`flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all whitespace-nowrap ${
                    activeTab === t.id 
                      ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' 
-                     : 'text-slate-500 hover:text-slate-200 hover:bg-slate-800'
+                     : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-white dark:hover:bg-slate-800'
                  }`}
               >
-                 <t.icon size={18} className={activeTab === t.id ? 'text-indigo-200' : ''} />
+                 <t.icon size={18} className={activeTab === t.id ? 'text-indigo-600 dark:text-indigo-200' : ''} />
                  <span className="font-bold text-sm">{t.label}</span>
               </button>
            ))}
          </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 md:p-6 pb-20 bg-slate-900">
+      <div className="flex-1 md:overflow-y-auto p-4 md:p-6 pb-20 bg-slate-100 dark:bg-slate-900">
         <div className="max-w-5xl mx-auto space-y-6">
 
         {activeTab === 'ringkasan' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            {/* Hero Header */}
+            <div className="relative overflow-hidden rounded-3xl p-6 bg-gradient-to-br from-indigo-600 via-indigo-600 to-violet-700 shadow-xl shadow-indigo-500/20">
+              <div className="absolute -right-10 -top-10 w-44 h-44 bg-white/10 rounded-full blur-2xl" />
+              <div className="absolute right-24 -bottom-16 w-44 h-44 bg-violet-400/20 rounded-full blur-2xl" />
+              <div className="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div>
+                  <p className="text-indigo-200 text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5">
+                    <Calendar size={12} /> {new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+                  </p>
+                  <h2 className="text-2xl font-black text-white mt-1.5">Halo, {user?.name?.split(' ')[0] || 'Owner'} 👋</h2>
+                  <p className="text-indigo-200 text-sm font-medium mt-0.5">Ringkasan bisnis kios kamu</p>
+                </div>
+                <div className="sm:text-right">
+                  <p className="text-indigo-200 text-[10px] font-black uppercase tracking-widest">Total Saldo</p>
+                  <p className="text-3xl font-black text-white mt-1 tracking-tight">Rp {totalSaldo.toLocaleString()}</p>
+                  <div className="flex gap-2 sm:justify-end mt-2 flex-wrap">
+                    {[{ l: 'Kas', v: balances.cash }, { l: 'APK', v: balances.apk }, { l: 'Bank', v: balances.seabank }, { l: 'QRIS', v: displayQris }].map(b => (
+                      <span key={b.l} className="bg-white/15 backdrop-blur px-2.5 py-1 rounded-lg text-[10px] font-bold text-white">
+                        {b.l}: Rp {(Number(b.v) || 0).toLocaleString()}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* Stats Grid */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
               {stats.map((s, i) => (
-                <div key={i} className="bg-slate-800 p-5 rounded-3xl border border-slate-700/50 flex items-center gap-4 hover:border-indigo-500/30 hover:shadow-lg hover:shadow-indigo-500/10 transition-all">
-                   <div className={`${s.bg} ${s.color} p-4 rounded-2xl`}><s.icon size={24} /></div>
-                   <div><p className="text-[10px] text-slate-500 font-extrabold uppercase tracking-wider">{s.title}</p><p className="text-xl font-black text-white">{s.value}</p></div>
+                <div key={i} className="group relative overflow-hidden bg-white dark:bg-slate-800 p-5 rounded-3xl border border-slate-200/60 dark:border-slate-700/50 hover:border-indigo-500/30 hover:shadow-xl hover:shadow-indigo-500/10 hover:-translate-y-0.5 transition-all duration-300">
+                   <div className={`absolute -right-5 -top-5 w-20 h-20 rounded-full bg-gradient-to-br ${s.grad} opacity-10 group-hover:opacity-20 blur-xl transition-opacity`} />
+                   <div className={`relative inline-flex p-3 rounded-2xl bg-gradient-to-br ${s.grad} text-white shadow-lg ${s.glow} mb-3`}><s.icon size={22} /></div>
+                   <p className="text-[10px] text-slate-500 font-extrabold uppercase tracking-wider">{s.title}</p>
+                   <p className="text-lg md:text-xl font-black text-slate-900 dark:text-white mt-0.5 truncate">{s.value}</p>
+                   <p className="text-[9px] text-slate-400 dark:text-slate-500 font-semibold mt-1">30 hari terakhir</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Quick Stats */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {subStats.map((s, i) => (
+                <div key={i} className="flex items-center gap-3 bg-white dark:bg-slate-800 px-4 py-3 rounded-2xl border border-slate-200/60 dark:border-slate-700/50">
+                   <div className="p-2.5 rounded-xl bg-slate-100 dark:bg-slate-700/50 text-indigo-600 dark:text-indigo-400 shrink-0"><s.icon size={18} /></div>
+                   <div className="min-w-0">
+                     <p className="text-[9px] text-slate-500 font-black uppercase tracking-wider">{s.title}</p>
+                     <p className="text-base font-black text-slate-900 dark:text-white truncate">{s.value}</p>
+                   </div>
                 </div>
               ))}
             </div>
@@ -660,32 +802,42 @@ export default function AdminDashboard() {
         {pendingCancellations.length > 0 && (
           <div className="bg-amber-500/10 rounded-3xl p-5 border border-amber-500/30">
              <div className="flex items-center gap-2 mb-4">
-                <AlertOctagon size={22} className="text-amber-400"/>
-                <h3 className="font-bold text-amber-400 text-base">Permintaan Pembatalan ({pendingCancellations.length})</h3>
+                <AlertOctagon size={22} className="text-amber-600 dark:text-amber-400"/>
+                <h3 className="font-bold text-amber-600 dark:text-amber-400 text-base">Permintaan Pembatalan ({pendingCancellations.length})</h3>
              </div>
              <div className="space-y-3">
                 {pendingCancellations.map(t => (
-                   <div key={t.id} className="bg-slate-800 p-4 rounded-2xl border border-amber-500/20 hover:border-amber-500/40 transition-all">
+                   <div key={t.id} className="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-amber-500/20 hover:border-amber-500/40 transition-all">
                       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                          <div>
                             <div className="flex items-center gap-2 flex-wrap">
-                               <p className="font-black text-white">{t.user}</p>
+                               <p className="font-black text-slate-900 dark:text-white">{t.user}</p>
                                <span className="text-[10px] text-slate-500 font-normal">
                                  {t.timestamp ? new Date(t.timestamp.seconds * 1000).toLocaleString('id-ID') : '-'}
                                </span>
-                               <span className="bg-amber-500/20 text-amber-400 text-[9px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">MENUNGGU RESPON</span>
+                               <span className="bg-amber-500/20 text-amber-600 dark:text-amber-400 text-[9px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">MENUNGGU RESPON</span>
+                               {(t.paymentMethod === 'kasbon' || t.kasbonName) && (
+                                 <span className="bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full">
+                                   KASBON: {t.kasbonName || 'Konsumen'}
+                                 </span>
+                               )}
                             </div>
-                            <p className="text-xs text-slate-400 mt-1 italic">{t.items?.map(it=>it.name).join(', ') || t.type}</p>
-                            <p className="text-sm font-black text-red-400 mt-1">Rp {t.total?.toLocaleString()}</p>
+                            <p className="text-xs text-slate-600 dark:text-slate-400 mt-1 italic">{t.items?.map(it=>it.name).join(', ') || t.type}</p>
+                            <p className="text-sm font-black text-red-600 dark:text-red-400 mt-1">Rp {t.total?.toLocaleString()}</p>
+                            {t.cancellationReason && (
+                               <p className="text-[10px] text-red-500/80 dark:text-red-400/80 font-medium mt-0.5">
+                                 Alasan: <span className="font-bold">{t.cancellationReason}</span>
+                               </p>
+                            )}
                             {t.profit !== undefined && t.profit > 0 && (
-                               <p className="text-[10px] font-bold text-amber-400 italic -mt-0.5">Laba: Rp {t.profit?.toLocaleString()}</p>
+                               <p className="text-[10px] font-bold text-amber-600 dark:text-amber-400 italic -mt-0.5">Laba: Rp {t.profit?.toLocaleString()}</p>
                             )}
                          </div>
                          <div className="flex items-center gap-2 w-full sm:w-auto mt-2 sm:mt-0 shrink-0">
-                            <button onClick={() => handleApproveCancellation(t)} className="flex-1 sm:flex-none px-4 py-2 bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 font-bold rounded-xl text-xs hover:bg-emerald-500/25 flex items-center justify-center gap-2 transition-all">
+                            <button onClick={() => handleApproveCancellation(t)} className="flex-1 sm:flex-none px-4 py-2 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 font-bold rounded-xl text-xs hover:bg-emerald-500/25 flex items-center justify-center gap-2 transition-all">
                                <Check size={14}/> Setujui
                             </button>
-                            <button onClick={() => handleRejectCancellation(t.id)} className="flex-1 sm:flex-none px-4 py-2 bg-red-500/15 text-red-400 border border-red-500/30 font-bold rounded-xl text-xs hover:bg-red-500/25 flex items-center justify-center gap-2 transition-all">
+                            <button onClick={() => handleRejectCancellation(t.id)} className="flex-1 sm:flex-none px-4 py-2 bg-red-500/15 text-red-600 dark:text-red-400 border border-red-500/30 font-bold rounded-xl text-xs hover:bg-red-500/25 flex items-center justify-center gap-2 transition-all">
                                <X size={14}/> Tolak
                             </button>
                          </div>
@@ -701,34 +853,34 @@ export default function AdminDashboard() {
         {activeTab === 'karyawan' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
         {/* ===================== SECTION: SDM ===================== */}
-        <div className="bg-slate-800 rounded-3xl p-5 border border-slate-700/50">
+        <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200/50 dark:border-slate-700/50">
            <div className="flex items-center justify-between cursor-pointer" onClick={() => setShowKaryawan(!showKaryawan)}>
-              <h3 className="font-bold text-white flex items-center gap-2"><Users size={18} className="text-indigo-400"/> Manajemen Karyawan ({employees.length})</h3>
-              <button className="p-1 hover:bg-slate-700 rounded-lg text-slate-400">{showKaryawan ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
+              <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2"><Users size={18} className="text-indigo-600 dark:text-indigo-400"/> Manajemen Karyawan ({employees.length})</h3>
+              <button className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg text-slate-600 dark:text-slate-400">{showKaryawan ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
            </div>
            <AnimatePresence>
               {showKaryawan && (
                  <motion.div initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} className="space-y-5 mt-5 overflow-hidden">
                     {msg.text && (
-                      <div className={`p-3 rounded-xl text-xs font-bold ${msg.type === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20':'bg-red-500/10 text-red-400 border border-red-500/20'}`}>{msg.text}</div>
+                      <div className={`p-3 rounded-xl text-xs font-bold ${msg.type === 'success' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20':'bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20'}`}>{msg.text}</div>
                     )}
                     <form onSubmit={handleRegister} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                       <input type="text" required placeholder="Nama Lengkap" value={regForm.name} onChange={e=>setRegForm({...regForm, name:e.target.value})} className="px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm font-medium text-white placeholder-slate-600 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none" />
-                       <input type="email" required placeholder="Email" value={regForm.email} onChange={e=>setRegForm({...regForm, email:e.target.value})} className="px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm font-medium text-white placeholder-slate-600 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none" />
-                       <input type="password" required minLength={6} placeholder="Password (min 6)" value={regForm.password} onChange={e=>setRegForm({...regForm, password:e.target.value})} className="px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm font-medium text-white placeholder-slate-600 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none" />
+                       <input type="text" required placeholder="Nama Lengkap" value={regForm.name} onChange={e=>setRegForm({...regForm, name:e.target.value})} className="px-4 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-medium text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none" />
+                       <input type="email" required placeholder="Email" value={regForm.email} onChange={e=>setRegForm({...regForm, email:e.target.value})} className="px-4 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-medium text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none" />
+                       <input type="password" required minLength={6} placeholder="Password (min 6)" value={regForm.password} onChange={e=>setRegForm({...regForm, password:e.target.value})} className="px-4 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-medium text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none" />
                        <button disabled={loadingReg} className="sm:col-span-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-sm disabled:opacity-50 flex items-center justify-center gap-2 transition-all">
                          {loadingReg ? <Loader2 className="animate-spin" size={16}/> : <UserPlus size={16}/>} Daftarkan Karyawan
                        </button>
                     </form>
-                    <div className="divide-y divide-slate-700/50 border-t border-slate-700/50">
-                       {employees.length === 0 && <p className="text-center text-slate-600 text-sm py-4 italic">Belum ada karyawan terdaftar</p>}
+                    <div className="divide-y divide-slate-200/50 dark:divide-slate-700/50 border-t border-slate-200/50 dark:border-slate-700/50">
+                       {employees.length === 0 && <p className="text-center text-slate-400 dark:text-slate-600 text-sm py-4 italic">Belum ada karyawan terdaftar</p>}
                        {employees.map((e, i) => (
                           <div key={i} className="py-3 flex justify-between items-center text-sm">
                             <div>
-                              <span className="font-bold text-white">{e.name}</span>
+                              <span className="font-bold text-slate-900 dark:text-white">{e.name}</span>
                               <span className="text-slate-500 text-xs ml-2">{e.email}</span>
                             </div>
-                            <span className="bg-indigo-500/15 text-indigo-400 border border-indigo-500/20 text-[10px] font-black px-2 py-1 rounded-full uppercase">Karyawan</span>
+                            <span className="bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 text-[10px] font-black px-2 py-1 rounded-full uppercase">Karyawan</span>
                           </div>
                        ))}
                     </div>
@@ -742,32 +894,32 @@ export default function AdminDashboard() {
         {activeTab === 'katalog' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
         {/* ===================== SECTION: KATALOG PRODUK ===================== */}
-        <div className="bg-slate-800 rounded-3xl p-5 border border-slate-700/50">
+        <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200/50 dark:border-slate-700/50">
            <div className="flex items-center justify-between cursor-pointer" onClick={() => setShowInventory(!showInventory)}>
-              <h3 className="font-bold text-white flex items-center gap-2"><Package size={18} className="text-indigo-400"/> Katalog Produk ({products.length})</h3>
-              <button className="p-1 hover:bg-slate-700 rounded-lg text-slate-400">{showInventory ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
+              <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2"><Package size={18} className="text-indigo-600 dark:text-indigo-400"/> Katalog Produk ({products.length})</h3>
+              <button className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg text-slate-600 dark:text-slate-400">{showInventory ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
            </div>
            <AnimatePresence>
               {showInventory && (
                  <motion.div initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} className="space-y-4 mt-5 overflow-hidden">
                     {/* Product Form */}
-                    <form onSubmit={handleProductSubmit} className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-900/60 p-4 rounded-2xl border border-slate-700/50">
-                       <input className="col-span-2 px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm font-medium text-white placeholder-slate-600 focus:border-indigo-500 focus:outline-none" placeholder="Nama Produk" required value={prodForm.name} onChange={e=>setProdForm({...prodForm, name:e.target.value})} />
-                       <select className="px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm font-medium text-white focus:border-indigo-500 focus:outline-none" value={prodForm.category} onChange={e=>setProdForm({...prodForm, category:e.target.value})}>
+                    <form onSubmit={handleProductSubmit} className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-100/60 dark:bg-slate-900/60 p-4 rounded-2xl border border-slate-200/50 dark:border-slate-700/50">
+                       <input className="col-span-2 px-3 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-medium text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 focus:border-indigo-500 focus:outline-none" placeholder="Nama Produk" required value={prodForm.name} onChange={e=>setProdForm({...prodForm, name:e.target.value})} />
+                       <select className="px-3 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-medium text-slate-900 dark:text-white focus:border-indigo-500 focus:outline-none" value={prodForm.category} onChange={e=>setProdForm({...prodForm, category:e.target.value})}>
                           {allCategories.map(c=><option key={c} value={c}>{c}</option>)}
                        </select>
-                       <select className="px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm font-medium text-white focus:border-indigo-500 focus:outline-none" value={prodForm.type} onChange={e=>setProdForm({...prodForm, type:e.target.value})}>
+                       <select className="px-3 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-medium text-slate-900 dark:text-white focus:border-indigo-500 focus:outline-none" value={prodForm.type} onChange={e=>setProdForm({...prodForm, type:e.target.value})}>
                           <option value="stok">Stok (Barang)</option>
                           <option value="jasa">Jasa (Layanan)</option>
                           <option value="saldo">Saldo (Isi Ulang)</option>
                        </select>
-                       <input className="px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-600 focus:border-indigo-500 focus:outline-none" type="number" placeholder="Modal / HPP" value={prodForm.costPrice} onChange={e=>setProdForm({...prodForm, costPrice:e.target.value})} />
-                       <input className="px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-600 focus:border-indigo-500 focus:outline-none" type="number" placeholder="Harga Jual" required value={prodForm.price} onChange={e=>setProdForm({...prodForm, price:e.target.value})} />
+                       <input className="px-3 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 focus:border-indigo-500 focus:outline-none" type="number" placeholder="Modal / HPP" value={prodForm.costPrice} onChange={e=>setProdForm({...prodForm, costPrice:e.target.value})} />
+                       <input className="px-3 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 focus:border-indigo-500 focus:outline-none" type="number" placeholder="Harga Jual" required value={prodForm.price} onChange={e=>setProdForm({...prodForm, price:e.target.value})} />
                        {prodForm.type === 'stok' && (
-                         <input className="px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-600 focus:border-indigo-500 focus:outline-none" type="number" placeholder="Stok" value={prodForm.stock} onChange={e=>setProdForm({...prodForm, stock:e.target.value})} />
+                         <input className="px-3 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 focus:border-indigo-500 focus:outline-none" type="number" placeholder="Stok" value={prodForm.stock} onChange={e=>setProdForm({...prodForm, stock:e.target.value})} />
                        )}
                        {(prodForm.type === 'jasa' || prodForm.type === 'saldo') && (
-                         <select className="px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm font-medium text-white focus:border-indigo-500 focus:outline-none" value={prodForm.action} onChange={e=>setProdForm({...prodForm, action:e.target.value})}>
+                         <select className="px-3 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-medium text-slate-900 dark:text-white focus:border-indigo-500 focus:outline-none" value={prodForm.action} onChange={e=>setProdForm({...prodForm, action:e.target.value})}>
                            <option value="">-- Aksi --</option>
                            <option value="isi">Isi Saldo</option>
                            <option value="transfer">Transfer</option>
@@ -782,12 +934,12 @@ export default function AdminDashboard() {
 
                     {/* Auto Price & Search */}
                     <div className="flex flex-wrap gap-2 items-center">
-                      <button onClick={handleAutoPriceVouchers} className="bg-amber-500/15 text-amber-400 border border-amber-500/20 px-3 py-1.5 rounded-xl text-[11px] font-bold hover:bg-amber-500/25 transition-all">
+                      <button onClick={handleAutoPriceVouchers} className="bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20 px-3 py-1.5 rounded-xl text-[11px] font-bold hover:bg-amber-500/25 transition-all">
                         ⚡ Auto Harga Voucher (+10%)
                       </button>
                       <div className="flex-1 relative">
-                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600"/>
-                        <input className="w-full pl-8 pr-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500" placeholder="Cari produk..." value={searchTerm} onChange={e=>setSearchTerm(e.target.value)}/>
+                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-600"/>
+                        <input className="w-full pl-8 pr-3 py-2 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 focus:outline-none focus:border-indigo-500" placeholder="Cari produk..." value={searchTerm} onChange={e=>setSearchTerm(e.target.value)}/>
                       </div>
                     </div>
 
@@ -795,7 +947,7 @@ export default function AdminDashboard() {
                     <div className="overflow-x-auto">
                        <table className="w-full text-xs font-bold">
                           <thead>
-                            <tr className="border-b border-slate-700/50">
+                            <tr className="border-b border-slate-200/50 dark:border-slate-700/50">
                               <th className="py-3 px-2 text-left text-slate-500 uppercase tracking-wider">NAMA</th>
                               <th className="py-3 px-2 text-center text-slate-500 uppercase tracking-wider">KAT</th>
                               <th className="py-3 px-2 text-center text-slate-500 uppercase tracking-wider">TIPE</th>
@@ -808,24 +960,25 @@ export default function AdminDashboard() {
                           </thead>
                           <tbody>
                             {filteredProducts.map(p => (
-                              <tr key={p.id} className="border-b border-slate-700/30 hover:bg-indigo-500/5 transition-colors">
-                                <td className="py-3 px-2 text-left font-black text-white">{p.name}</td>
-                                <td className="py-3 px-2 text-center"><span className="bg-slate-700 text-slate-300 px-2 py-0.5 rounded-full text-[10px]">{p.category}</span></td>
-                                <td className="py-3 px-2 text-center"><span className={`px-2 py-0.5 rounded-full text-[10px] ${p.type === 'stok' ? 'bg-blue-500/15 text-blue-400' : p.type === 'saldo' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-violet-500/15 text-violet-400'}`}>{p.type}</span></td>
+                              <tr key={p.id} className="border-b border-slate-200/30 dark:border-slate-700/30 hover:bg-indigo-500/5 transition-colors">
+                                <td className="py-3 px-2 text-left font-black text-slate-900 dark:text-white">{p.name}</td>
+                                <td className="py-3 px-2 text-center"><span className="bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 px-2 py-0.5 rounded-full text-[10px]">{p.category}</span></td>
+                                <td className="py-3 px-2 text-center"><span className={`px-2 py-0.5 rounded-full text-[10px] ${p.type === 'stok' ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400' : p.type === 'saldo' ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'bg-violet-500/15 text-violet-600 dark:text-violet-400'}`}>{p.type}</span></td>
                                 <td className="py-3 px-2 text-center italic text-slate-500">{p.costPrice?.toLocaleString() || '-'}</td>
-                                <td className="py-3 px-2 text-center text-indigo-400">{p.price?.toLocaleString()}</td>
-                                <td className="py-3 px-2 text-center text-emerald-400 italic">{p.costPrice ? (p.price - p.costPrice).toLocaleString() : '-'}</td>
-                                <td className="py-3 px-2 text-center text-slate-400">{p.type === 'stok' ? p.stock : '∞'}</td>
+                                <td className="py-3 px-2 text-center text-indigo-600 dark:text-indigo-400">{p.price?.toLocaleString()}</td>
+                                <td className="py-3 px-2 text-center text-emerald-600 dark:text-emerald-400 italic">{p.costPrice ? (p.price - p.costPrice).toLocaleString() : '-'}</td>
+                                <td className="py-3 px-2 text-center text-slate-600 dark:text-slate-400">{p.type === 'stok' ? p.stock : '∞'}</td>
                                 <td className="py-3 px-2 text-right space-x-1">
-                                  <button onClick={()=>startEdit(p)} className="p-1.5 text-amber-400 hover:bg-amber-500/15 rounded-lg transition-colors"><Edit3 size={14}/></button>
-                                  <button onClick={()=>deleteProduct(p.id)} className="p-1.5 text-red-400 hover:bg-red-500/15 rounded-lg transition-colors"><Trash2 size={14}/></button>
+                                  <button onClick={()=>startEdit(p)} className="p-1.5 text-amber-600 dark:text-amber-400 hover:bg-amber-500/15 rounded-lg transition-colors"><Edit3 size={14}/></button>
+                                  <button onClick={()=>deleteProduct(p.id)} className="p-1.5 text-red-600 dark:text-red-400 hover:bg-red-500/15 rounded-lg transition-colors"><Trash2 size={14}/></button>
                                 </td>
                               </tr>
                             ))}
                           </tbody>
                        </table>
-                       {filteredProducts.length === 0 && <p className="text-center text-slate-600 text-sm py-6 italic">Tidak ada produk ditemukan</p>}
+                       {filteredProducts.length === 0 && <p className="text-center text-slate-400 dark:text-slate-600 text-sm py-6 italic">Tidak ada produk ditemukan</p>}
                     </div>
+
                  </motion.div>
               )}
            </AnimatePresence>
@@ -836,40 +989,44 @@ export default function AdminDashboard() {
         {activeTab === 'keuangan' && (
           <div className="space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
         {/* ===================== SECTION: SALDO & MODAL ===================== */}
-        <div className="bg-slate-800 rounded-3xl p-5 border border-slate-700/50">
+        <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200/50 dark:border-slate-700/50">
            <div className="flex items-center justify-between cursor-pointer" onClick={() => setShowBalances(!showBalances)}>
-              <h3 className="font-bold text-white flex items-center gap-2"><Wallet size={18} className="text-indigo-400"/> Saldo & Modal</h3>
-              <button className="p-1 hover:bg-slate-700 rounded-lg text-slate-400">{showBalances ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
+              <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2"><Wallet size={18} className="text-indigo-600 dark:text-indigo-400"/> Saldo & Modal</h3>
+              <button className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg text-slate-600 dark:text-slate-400">{showBalances ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
            </div>
            <AnimatePresence>
               {showBalances && (
                  <motion.div initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} className="space-y-4 mt-5 overflow-hidden">
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                        {Object.entries(balances).map(([k,v])=>(
-                          <div key={k} className="bg-slate-900/60 p-3 rounded-2xl border border-slate-700/50">
+                          <div key={k} className="bg-slate-100/60 dark:bg-slate-900/60 p-3 rounded-2xl border border-slate-200/50 dark:border-slate-700/50">
                             <p className="text-[9px] uppercase font-black text-slate-500 tracking-wider">{k === 'modalShift' ? 'Modal Baku' : k}</p>
-                            <p className="text-sm font-black text-white italic">{typeof v === 'number' ? `Rp ${v.toLocaleString()}` : v}</p>
+                            <p className="text-sm font-black text-slate-900 dark:text-white italic">{typeof v === 'number' ? `Rp ${v.toLocaleString()}` : v}</p>
                           </div>
                        ))}
                     </div>
-                    <form onSubmit={handleBalanceUpdate} className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <form onSubmit={handleBalanceUpdate} className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                        <div>
                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Cash</label>
-                         <input className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white focus:border-indigo-500 focus:outline-none" type="number" value={balForm.cash} onChange={e=>setBalForm({...balForm, cash:e.target.value})} />
+                         <input className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-white focus:border-indigo-500 focus:outline-none" type="number" value={balForm.cash} onChange={e=>setBalForm({...balForm, cash:e.target.value})} />
                        </div>
                        <div>
                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">APK</label>
-                         <input className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white focus:border-indigo-500 focus:outline-none" type="number" value={balForm.apk} onChange={e=>setBalForm({...balForm, apk:e.target.value})} />
+                         <input className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-white focus:border-indigo-500 focus:outline-none" type="number" value={balForm.apk} onChange={e=>setBalForm({...balForm, apk:e.target.value})} />
                        </div>
                        <div>
                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Seabank</label>
-                         <input className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white focus:border-indigo-500 focus:outline-none" type="number" value={balForm.seabank} onChange={e=>setBalForm({...balForm, seabank:e.target.value})} />
+                         <input className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-white focus:border-indigo-500 focus:outline-none" type="number" value={balForm.seabank} onChange={e=>setBalForm({...balForm, seabank:e.target.value})} />
+                       </div>
+                       <div>
+                         <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">QRIS</label>
+                         <input className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-white focus:border-indigo-500 focus:outline-none" type="number" value={balForm.qris} onChange={e=>setBalForm({...balForm, qris:e.target.value})} />
                        </div>
                        <div>
                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Modal Shift</label>
-                         <input className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white focus:border-indigo-500 focus:outline-none" type="number" value={balForm.modalShift} onChange={e=>setBalForm({...balForm, modalShift:e.target.value})} />
+                         <input className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-900 dark:text-white focus:border-indigo-500 focus:outline-none" type="number" value={balForm.modalShift} onChange={e=>setBalForm({...balForm, modalShift:e.target.value})} />
                        </div>
-                       <button disabled={loadingBal} className="col-span-2 sm:col-span-4 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-sm disabled:opacity-50 flex items-center justify-center gap-2 transition-all">
+                       <button disabled={loadingBal} className="col-span-2 sm:col-span-5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl text-sm disabled:opacity-50 flex items-center justify-center gap-2 transition-all">
                          {loadingBal ? <Loader2 className="animate-spin" size={16}/> : <Save size={16}/>} Update Saldo & Modal
                        </button>
                        <button 
@@ -881,10 +1038,11 @@ export default function AdminDashboard() {
                              initialCash: balances.cash,
                              initialApk: balances.apk,
                              initialSeabank: balances.seabank,
+                             initialQris: displayQris,
                              initialStocks: products.reduce((acc, p) => ({ ...acc, [p.id]: p.stock }), {})
                            });
                          }}
-                         className="col-span-2 sm:col-span-4 bg-red-500/10 text-red-400 border border-red-500/20 font-bold py-2.5 rounded-xl text-sm hover:bg-red-500/20 flex items-center justify-center gap-2 mt-2 transition-all"
+                         className="col-span-2 sm:col-span-5 bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20 font-bold py-2.5 rounded-xl text-sm hover:bg-red-500/20 flex items-center justify-center gap-2 mt-2 transition-all"
                        >
                          <ShieldCheck size={18}/> Buka Fitur Super Audit (Rekonsiliasi Manual)
                        </button>
@@ -895,10 +1053,10 @@ export default function AdminDashboard() {
         </div>
 
         {/* ===================== SECTION: MUTASI / PENYESUAIAN MANUAL ===================== */}
-        <div className="bg-slate-800 rounded-3xl p-5 border border-slate-700/50">
+        <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200/50 dark:border-slate-700/50">
              <div className="flex items-center justify-between cursor-pointer" onClick={() => setPenyesuaianModal(true)}>
-                <h3 className="font-bold text-white flex items-center gap-2"><Wallet size={18} className="text-violet-400"/> Mutasi / Penyesuaian Saldo Manual</h3>
-                <button className="p-2 hover:bg-slate-700 rounded-lg text-indigo-400 font-bold text-xs flex items-center gap-1 border border-indigo-500/20 bg-indigo-500/10"><Plus size={16}/> BUKA FORM</button>
+                <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2"><Wallet size={18} className="text-violet-600 dark:text-violet-400"/> Mutasi / Penyesuaian Saldo Manual</h3>
+                <button className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg text-indigo-600 dark:text-indigo-400 font-bold text-xs flex items-center gap-1 border border-indigo-500/20 bg-indigo-500/10"><Plus size={16}/> BUKA FORM</button>
              </div>
         </div>
 
@@ -906,15 +1064,15 @@ export default function AdminDashboard() {
         <AnimatePresence>
          {penyesuaianModal && (
            <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-              <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-slate-800 border border-slate-700/50 p-6 rounded-3xl shadow-2xl w-full max-w-md">
+              <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white dark:bg-slate-800 border border-slate-200/50 dark:border-slate-700/50 p-6 rounded-3xl shadow-2xl w-full max-w-md">
                  <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-xl font-black text-white">Penyesuaian Saldo Manual</h3>
-                    <button onClick={() => setPenyesuaianModal(false)} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-slate-400"><X size={20}/></button>
+                    <h3 className="text-xl font-black text-slate-900 dark:text-white">Penyesuaian Saldo Manual</h3>
+                    <button onClick={() => setPenyesuaianModal(false)} className="p-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 rounded-xl text-slate-600 dark:text-slate-400"><X size={20}/></button>
                  </div>
                  <form onSubmit={handlePenyesuaian} className="space-y-4 pb-4">
                     <div>
                        <label className="text-[10px] font-black text-slate-500 uppercase ml-1 block mb-1.5">Pilih Saldo</label>
-                       <select required className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-xl font-bold text-white focus:border-indigo-500 focus:outline-none" value={penyesuaianForm.jenisSistem} onChange={e => setPenyesuaianForm({...penyesuaianForm, jenisSistem: e.target.value})}>
+                       <select required className="w-full px-4 py-3 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white focus:border-indigo-500 focus:outline-none" value={penyesuaianForm.jenisSistem} onChange={e => setPenyesuaianForm({...penyesuaianForm, jenisSistem: e.target.value})}>
                           <option value="cash">Kas Fisik</option>
                           <option value="seabank">Seabank</option>
                           <option value="apk">Saldo APK / E-Wallet</option>
@@ -922,20 +1080,20 @@ export default function AdminDashboard() {
                     </div>
                     <div>
                        <label className="text-[10px] font-black text-slate-500 uppercase ml-1 block mb-1.5">Jenis Aksi</label>
-                       <select required className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-xl font-bold text-white focus:border-indigo-500 focus:outline-none" value={penyesuaianForm.jenisAksi} onChange={e => setPenyesuaianForm({...penyesuaianForm, jenisAksi: e.target.value})}>
+                       <select required className="w-full px-4 py-3 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white focus:border-indigo-500 focus:outline-none" value={penyesuaianForm.jenisAksi} onChange={e => setPenyesuaianForm({...penyesuaianForm, jenisAksi: e.target.value})}>
                           <option value="tambah">TAMBAH Saldo (+)</option>
                           <option value="kurang">KURANGI Saldo (-)</option>
                        </select>
                     </div>
                     <div>
                        <label className="text-[10px] font-black text-slate-500 uppercase ml-1 block mb-1.5">Nominal (Rp)</label>
-                       <input type="number" required placeholder="Rp Nominal" className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-xl font-bold text-lg text-white focus:border-indigo-500 focus:outline-none" value={penyesuaianForm.nominal} onChange={e => setPenyesuaianForm({...penyesuaianForm, nominal: e.target.value})} />
+                       <input type="number" required placeholder="Rp Nominal" className="w-full px-4 py-3 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-lg text-slate-900 dark:text-white focus:border-indigo-500 focus:outline-none" value={penyesuaianForm.nominal} onChange={e => setPenyesuaianForm({...penyesuaianForm, nominal: e.target.value})} />
                     </div>
                     <div>
                        <label className="text-[10px] font-black text-slate-500 uppercase ml-1 block mb-1.5">Keterangan / Alasan</label>
-                       <input type="text" required placeholder="Penjelasan Mutasi" className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-xl font-bold text-white focus:border-indigo-500 focus:outline-none" value={penyesuaianForm.keterangan} onChange={e => setPenyesuaianForm({...penyesuaianForm, keterangan: e.target.value})} />
+                       <input type="text" required placeholder="Penjelasan Mutasi" className="w-full px-4 py-3 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white focus:border-indigo-500 focus:outline-none" value={penyesuaianForm.keterangan} onChange={e => setPenyesuaianForm({...penyesuaianForm, keterangan: e.target.value})} />
                     </div>
-                    <div className="bg-violet-500/10 p-4 rounded-xl text-violet-400 text-xs font-bold flex items-start gap-2 border border-violet-500/20">
+                    <div className="bg-violet-500/10 p-4 rounded-xl text-violet-600 dark:text-violet-400 text-xs font-bold flex items-start gap-2 border border-violet-500/20">
                        <AlertOctagon size={18} className="shrink-0" />
                        <p>Aksi ini akan menyesuaikan saldo sistem secara manual (dicatat sebagai adjustment), dan tidak mempengaruhi total laba perputaran transaksi.</p>
                     </div>
@@ -949,10 +1107,10 @@ export default function AdminDashboard() {
         </AnimatePresence>
 
         {/* ===================== SECTION: LAPORAN ANALITIK ===================== */}
-        <div className="bg-slate-800 rounded-3xl p-5 border border-slate-700/50">
+        <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200/50 dark:border-slate-700/50">
            <div className="flex items-center justify-between cursor-pointer" onClick={() => setShowReport(!showReport)}>
-              <h3 className="font-bold text-white flex items-center gap-2"><BarChart3 size={18} className="text-indigo-400"/> Laporan Analitik</h3>
-              <button className="p-1 hover:bg-slate-700 rounded-lg text-slate-400">{showReport ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
+              <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2"><BarChart3 size={18} className="text-indigo-600 dark:text-indigo-400"/> Laporan Analitik</h3>
+              <button className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg text-slate-600 dark:text-slate-400">{showReport ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
            </div>
            <AnimatePresence>
               {showReport && (
@@ -960,7 +1118,7 @@ export default function AdminDashboard() {
                     {/* Time Range Filter */}
                     <div className="flex gap-2">
                        {['Today','Week','Month'].map(r => (
-                         <button key={r} onClick={()=>setReportRange(r)} className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${reportRange===r ? 'bg-indigo-600 text-white shadow-md shadow-indigo-500/20':'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}>
+                         <button key={r} onClick={()=>setReportRange(r)} className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${reportRange===r ? 'bg-indigo-600 text-white shadow-md shadow-indigo-500/20':'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-300 dark:hover:bg-slate-600'}`}>
                            {r === 'Today' ? 'Hari Ini' : r === 'Week' ? 'Seminggu' : 'Bulan Ini'}
                          </button>
                        ))}
@@ -968,37 +1126,37 @@ export default function AdminDashboard() {
                     {/* Summary Cards */}
                     <div className="grid grid-cols-3 gap-3">
                       <div className="bg-indigo-500/10 p-4 rounded-2xl border border-indigo-500/20">
-                        <p className="text-[10px] font-black text-indigo-400 uppercase">Total</p>
-                        <p className="text-base font-black text-indigo-300">Rp {reportTotal.toLocaleString()}</p>
+                        <p className="text-[10px] font-black text-indigo-600 dark:text-indigo-400 uppercase">Total</p>
+                        <p className="text-base font-black text-indigo-600 dark:text-indigo-300">Rp {reportTotal.toLocaleString()}</p>
                       </div>
                       <div className="bg-emerald-500/10 p-4 rounded-2xl border border-emerald-500/20">
-                        <p className="text-[10px] font-black text-emerald-400 uppercase">Laba</p>
-                        <p className="text-base font-black text-emerald-300">Rp {reportProfit.toLocaleString()}</p>
+                        <p className="text-[10px] font-black text-emerald-600 dark:text-emerald-400 uppercase">Laba</p>
+                        <p className="text-base font-black text-emerald-600 dark:text-emerald-300">Rp {reportProfit.toLocaleString()}</p>
                       </div>
                       <div className="bg-amber-500/10 p-4 rounded-2xl border border-amber-500/20">
-                        <p className="text-[10px] font-black text-amber-400 uppercase">Rata-rata</p>
-                        <p className="text-base font-black text-amber-300">Rp {reportAvg.toLocaleString()}</p>
+                        <p className="text-[10px] font-black text-amber-600 dark:text-amber-400 uppercase">Rata-rata</p>
+                        <p className="text-base font-black text-amber-600 dark:text-amber-300">Rp {reportAvg.toLocaleString()}</p>
                       </div>
                     </div>
                     {/* Category Breakdown */}
-                    <div className="bg-slate-900/60 rounded-2xl p-4 border border-slate-700/50">
+                    <div className="bg-slate-100/60 dark:bg-slate-900/60 rounded-2xl p-4 border border-slate-200/50 dark:border-slate-700/50">
                       <p className="text-[10px] font-black text-slate-500 uppercase tracking-wider mb-3">Laba Per Kategori</p>
-                      {Object.entries(categorySummary).length === 0 && <p className="text-xs italic text-slate-600 text-center">Tidak ada data</p>}
+                      {Object.entries(categorySummary).length === 0 && <p className="text-xs italic text-slate-400 dark:text-slate-600 text-center">Tidak ada data</p>}
                       <div className="space-y-3">
                         {Object.entries(categorySummary).sort((a,b)=>b[1]-a[1]).map(([cat, val]) => (
                           <div key={cat} className="flex justify-between items-center">
-                            <span className="text-xs font-bold text-slate-300">{cat}</span>
+                            <span className="text-xs font-bold text-slate-700 dark:text-slate-300">{cat}</span>
                             <div className="flex items-center gap-3">
-                              <div className="w-24 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                              <div className="w-24 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
                                 <div className="h-full bg-indigo-500 rounded-full" style={{width: `${Math.min(100, (val / reportTotal) * 100)}%`}}/>
                               </div>
-                              <span className="text-xs font-black text-indigo-400 w-24 text-right">Rp {val.toLocaleString()}</span>
+                              <span className="text-xs font-black text-indigo-600 dark:text-indigo-400 w-24 text-right">Rp {val.toLocaleString()}</span>
                             </div>
                           </div>
                         ))}
                       </div>
                     </div>
-                    <p className="text-[10px] text-slate-600 font-medium text-center italic">{filteredReportTrans.length} transaksi dalam periode ini</p>
+                    <p className="text-[10px] text-slate-400 dark:text-slate-600 font-medium text-center italic">{filteredReportTrans.length} transaksi dalam periode ini</p>
                  </motion.div>
               )}
            </AnimatePresence>
@@ -1009,29 +1167,69 @@ export default function AdminDashboard() {
         {activeTab === 'riwayat' && (
           <div className="space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
         {/* ===================== SECTION: RIWAYAT CLOSING ===================== */}
-        <div className="bg-slate-800 rounded-3xl p-5 border border-slate-700/50">
+        <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200/50 dark:border-slate-700/50">
            <div className="flex items-center justify-between cursor-pointer" onClick={() => setShowClosings(!showClosings)}>
-              <h3 className="font-bold text-white flex items-center gap-2"><ListChecks size={18} className="text-indigo-400"/> Riwayat Closing Shift ({closings.length})</h3>
-              <button className="p-1 hover:bg-slate-700 rounded-lg text-slate-400">{showClosings ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
+              <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2"><ListChecks size={18} className="text-indigo-600 dark:text-indigo-400"/> Riwayat Closing Shift ({filteredClosings.length}{filteredClosings.length !== closings.length ? `/${closings.length}` : ''})</h3>
+              <button className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg text-slate-600 dark:text-slate-400">{showClosings ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
            </div>
            <AnimatePresence>
               {showClosings && (
                  <motion.div initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} className="space-y-3 mt-5 overflow-hidden">
-                    {closings.length === 0 && <p className="text-center text-slate-600 text-sm py-4 italic">Belum ada data closing</p>}
-                    {closings.map(cl => (
-                       <div key={cl.id} onClick={() => setSelectedClosing(cl)} className="p-4 bg-slate-900/60 rounded-2xl border border-slate-700/50 hover:border-indigo-500/30 hover:bg-indigo-500/5 cursor-pointer transition-all">
+                    {closings.length > 0 && (
+                      <div className="flex flex-wrap items-end gap-2 p-3 bg-slate-100/60 dark:bg-slate-900/60 rounded-2xl border border-slate-200/50 dark:border-slate-700/50">
+                        <div className="flex-1 min-w-[120px]">
+                          <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider block mb-1">Dari Tanggal</label>
+                          <input type="date" value={closingFilter.start} max={closingFilter.end || undefined}
+                            onChange={e => setClosingFilter(f => ({ ...f, start: e.target.value }))}
+                            className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500" />
+                        </div>
+                        <div className="flex-1 min-w-[120px]">
+                          <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider block mb-1">Sampai Tanggal</label>
+                          <input type="date" value={closingFilter.end} min={closingFilter.start || undefined}
+                            onChange={e => setClosingFilter(f => ({ ...f, end: e.target.value }))}
+                            className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500" />
+                        </div>
+                        {(closingFilter.start || closingFilter.end) && (
+                          <button onClick={() => setClosingFilter({ start: '', end: '' })}
+                            className="px-3 py-2 bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20 rounded-xl text-[10px] font-black uppercase tracking-wider hover:bg-red-500/20 transition-all flex items-center gap-1">
+                            <X size={13}/> Reset
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {filteredClosings.length > 0 && (
+                      <div className="grid grid-cols-3 gap-2 p-3 bg-slate-100/60 dark:bg-slate-900/60 rounded-2xl border border-slate-200/50 dark:border-slate-700/50">
+                        <div className="text-center px-1">
+                          <p className="text-[8px] sm:text-[9px] font-black text-slate-500 uppercase tracking-wider leading-tight">Laba (tanpa selisih)</p>
+                          <p className="text-xs sm:text-sm font-black text-emerald-600 dark:text-emerald-400 mt-1">Rp {labaKotorClosing.toLocaleString()}</p>
+                        </div>
+                        <div className="text-center px-1 border-x border-slate-200/50 dark:border-slate-700/50">
+                          <p className="text-[8px] sm:text-[9px] font-black text-slate-500 uppercase tracking-wider leading-tight">Total Selisih</p>
+                          <p className={`text-xs sm:text-sm font-black mt-1 ${totalSelisih >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>Rp {totalSelisih.toLocaleString()}</p>
+                        </div>
+                        <div className="text-center px-1">
+                          <p className="text-[8px] sm:text-[9px] font-black text-slate-500 uppercase tracking-wider leading-tight">Laba Bersih</p>
+                          <p className="text-xs sm:text-sm font-black text-slate-900 dark:text-white mt-1">Rp {labaBersihClosing.toLocaleString()}</p>
+                        </div>
+                      </div>
+                    )}
+                    {closings.length === 0 && <p className="text-center text-slate-400 dark:text-slate-600 text-sm py-4 italic">Belum ada data closing</p>}
+                    {closings.length > 0 && filteredClosings.length === 0 && <p className="text-center text-slate-400 dark:text-slate-600 text-sm py-4 italic">Tidak ada closing pada rentang tanggal ini</p>}
+                    {filteredClosings.map(cl => (
+                       <div key={cl.id} onClick={() => setSelectedClosing(cl)} className="p-4 bg-slate-100/60 dark:bg-slate-900/60 rounded-2xl border border-slate-200/50 dark:border-slate-700/50 hover:border-indigo-500/30 hover:bg-indigo-500/5 cursor-pointer transition-all">
                           <div className="flex justify-between items-start">
                              <div>
-                                <p className="text-xs font-black text-white">{cl.user} • <span className="text-indigo-400">{cl.shift}</span></p>
+                                <p className="text-xs font-black text-slate-900 dark:text-white">{cl.user} • <span className="text-indigo-600 dark:text-indigo-400">{cl.shift}</span></p>
                                 <p className="text-[10px] text-slate-500 italic">{cl.timestamp ? new Date(cl.timestamp.seconds * 1000).toLocaleString('id-ID') : '-'}</p>
+                                <p className="text-[9px] text-slate-400 dark:text-slate-500 font-mono mt-1">ID: {cl.id}</p>
                              </div>
                              <div className="text-right">
-                                <p className="text-sm font-black text-indigo-400">Setoran: Rp {cl.setoran?.toLocaleString()}</p>
+                                <p className="text-sm font-black text-indigo-600 dark:text-indigo-400">Setoran: Rp {cl.setoran?.toLocaleString()}</p>
                                 {cl.totalProfit !== undefined && (
-                                  <span className="bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 font-bold text-[10px] px-2 py-0.5 rounded-md italic">Laba: Rp {cl.totalProfit?.toLocaleString()}</span>
+                                  <span className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 font-bold text-[10px] px-2 py-0.5 rounded-md italic">Laba: Rp {cl.totalProfit?.toLocaleString()}</span>
                                 )}
                                 {cl.selisih !== undefined && (
-                                  <span className={`ml-1 text-[10px] font-black px-2 py-0.5 rounded-md border ${cl.selisih >= 0 ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-red-500/10 text-red-400 border-red-500/20'}`}>
+                                  <span className={`ml-1 text-[10px] font-black px-2 py-0.5 rounded-md border ${cl.selisih >= 0 ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20' : 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20'}`}>
                                     Selisih: Rp {cl.selisih?.toLocaleString()}
                                   </span>
                                 )}
@@ -1045,9 +1243,9 @@ export default function AdminDashboard() {
         </div>
 
         {/* ===================== SECTION: LOG TRANSAKSI ===================== */}
-        <div className="bg-slate-800 rounded-3xl p-5 border border-slate-700/50">
+        <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200/50 dark:border-slate-700/50">
            <div className="flex items-center justify-between cursor-pointer" onClick={() => setShowLogs(!showLogs)}>
-              <h3 className="font-bold text-white flex items-center gap-2"><History size={18} className="text-indigo-400"/> Log Transaksi ({transactions.length})</h3>
+              <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2"><History size={18} className="text-indigo-600 dark:text-indigo-400"/> Log Transaksi ({transactions.length})</h3>
               <div className="flex gap-2 items-center">
                  {showLogs && (
                    <input 
@@ -1056,49 +1254,51 @@ export default function AdminDashboard() {
                      value={logSearchTerm}
                      onChange={(e) => setLogSearchTerm(e.target.value)}
                      onClick={(e) => e.stopPropagation()}
-                     className="px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-semibold text-white placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 w-32 sm:w-48 transition-all"
+                     className="px-3 py-1.5 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-semibold text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 w-32 sm:w-48 transition-all"
                    />
                  )}
-                 <button className="p-1 hover:bg-slate-700 rounded-lg text-slate-400">{showLogs ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
+                 <button className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg text-slate-600 dark:text-slate-400">{showLogs ? <ChevronUp size={18}/> : <ChevronDown size={18}/>}</button>
               </div>
            </div>
            <AnimatePresence>
               {showLogs && (
-                 <motion.div initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} className="divide-y divide-slate-700/50 mt-4 overflow-hidden">
+                 <motion.div initial={{opacity:0,height:0}} animate={{opacity:1,height:'auto'}} exit={{opacity:0,height:0}} className="divide-y divide-slate-200/50 dark:divide-slate-700/50 mt-4 overflow-hidden">
                      {filteredLogs.slice(0, 100).map(t => (
                         <div key={t.id} className={`py-3 ${t.status === 'cancelled' ? 'opacity-40' : ''}`}>
                            <div className="flex justify-between items-start">
                               <div className="flex-1 min-w-0">
                                  <div className="flex items-center gap-2 flex-wrap">
-                                   <span className="text-xs font-black text-white">{t.user}</span>
-                                   <span className="text-[10px] text-slate-600">• {t.shift}</span>
+                                   <span className="text-xs font-black text-slate-900 dark:text-white">{t.user}</span>
+                                   <span className="text-[10px] text-slate-400 dark:text-slate-600">• {t.shift}</span>
                                    {t.type === 'adjustment' && <span className="bg-yellow-500/15 text-yellow-400 border border-yellow-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full">AUDIT</span>}
-                                   {t.type === 'expenditure' && <span className="bg-orange-500/15 text-orange-400 border border-orange-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full">PENGELUARAN</span>}
-                                   {t.status === 'cancelled' && <span className="bg-red-500/15 text-red-400 border border-red-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full">BATAL</span>}
-                                   {(t.status === 'pending_cancellation' || t.status === 'cancellation_requested') && <span className="bg-amber-500/15 text-amber-400 border border-amber-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">MINTA BATAL</span>}
-                                   {t.closed && <span className="bg-slate-700 text-slate-400 text-[9px] font-bold px-1.5 py-0.5 rounded-full flex items-center gap-0.5"><FileCheck2 size={10}/> Closed</span>}
+                                   {t.type === 'expenditure' && <span className="bg-orange-500/15 text-orange-600 dark:text-orange-400 border border-orange-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full">PENGELUARAN</span>}
+                                   {(t.paymentMethod === 'kasbon' || t.kasbonName) && <span className="bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full">{t.kasbonName ? `Kasbon: ${t.kasbonName}` : 'Kasbon'}</span>}
+                                   {t.status === 'cancelled' && <span className="bg-red-500/15 text-red-600 dark:text-red-400 border border-red-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full">BATAL</span>}
+                                   {(t.status === 'pending_cancellation' || t.status === 'cancellation_requested') && <span className="bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20 text-[9px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">MINTA BATAL</span>}
+                                   {t.closed && <span className="bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-400 text-[9px] font-bold px-1.5 py-0.5 rounded-full flex items-center gap-0.5"><FileCheck2 size={10}/> Closed</span>}
                                  </div>
                                  <p className="text-[10px] text-slate-500 italic truncate mt-0.5">{t.items?.map(it=>it.name).join(', ') || (t.type === 'adjustment' ? 'Penyesuaian Manual' : '-')}</p>
-                                 {t.timestamp && <p className="text-[9px] text-slate-600 mt-0.5">{new Date(t.timestamp.seconds * 1000).toLocaleString('id-ID')}</p>}
+                                 {t.cancellationReason && <p className="text-[9px] text-red-500/80 dark:text-red-400/80 italic mt-0.5 truncate">Alasan batal: {t.cancellationReason}</p>}
+                                 {t.timestamp && <p className="text-[9px] text-slate-400 dark:text-slate-600 mt-0.5">{new Date(t.timestamp.seconds * 1000).toLocaleString('id-ID')}</p>}
                               </div>
                               <div className="text-right ml-2 shrink-0">
-                                 <p className={`text-sm font-black ${t.status === 'cancelled' ? 'text-red-400 line-through' : t.type === 'expenditure' ? 'text-orange-400' : 'text-white'}`}>
+                                 <p className={`text-sm font-black ${t.status === 'cancelled' ? 'text-red-600 dark:text-red-400 line-through' : t.type === 'expenditure' ? 'text-orange-600 dark:text-orange-400' : 'text-slate-900 dark:text-white'}`}>
                                    Rp {t.total?.toLocaleString()}
                                  </p>
                                  {!['adjustment', 'cancelled'].includes(t.status) && t.profit !== undefined && t.profit > 0 && (
-                                    <span className="text-[10px] font-bold text-amber-400 italic block -mt-0.5 leading-tight">Laba: Rp {t.profit?.toLocaleString()}</span>
+                                    <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 italic block -mt-0.5 leading-tight">Laba: Rp {t.profit?.toLocaleString()}</span>
                                  )}
                                  {(t.status === 'pending_cancellation' || t.status === 'cancellation_requested') && (
                                    <div className="flex gap-1 mt-1 justify-end">
-                                     <button onClick={(e) => { e.stopPropagation(); handleApproveCancellation(t); }} className="p-1 bg-emerald-500/15 text-emerald-400 rounded-lg hover:bg-emerald-500/25 transition-colors" title="Setujui"><Check size={14}/></button>
-                                     <button onClick={(e) => { e.stopPropagation(); handleRejectCancellation(t.id); }} className="p-1 bg-red-500/15 text-red-400 rounded-lg hover:bg-red-500/25 transition-colors" title="Tolak"><X size={14}/></button>
+                                     <button onClick={(e) => { e.stopPropagation(); handleApproveCancellation(t); }} className="p-1 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 rounded-lg hover:bg-emerald-500/25 transition-colors" title="Setujui"><Check size={14}/></button>
+                                     <button onClick={(e) => { e.stopPropagation(); handleRejectCancellation(t.id); }} className="p-1 bg-red-500/15 text-red-600 dark:text-red-400 rounded-lg hover:bg-red-500/25 transition-colors" title="Tolak"><X size={14}/></button>
                                    </div>
                                  )}
                               </div>
                            </div>
                         </div>
                      ))}
-                     {filteredLogs.length === 0 && <p className="text-center text-slate-600 text-sm py-6 italic">Tidak ada transaksi ditemukan</p>}
+                     {filteredLogs.length === 0 && <p className="text-center text-slate-400 dark:text-slate-600 text-sm py-6 italic">Tidak ada transaksi ditemukan</p>}
                  </motion.div>
               )}
            </AnimatePresence>
@@ -1111,7 +1311,7 @@ export default function AdminDashboard() {
           {showAudit && (
             <div className="fixed inset-0 bg-black/60 z-[120] flex items-center justify-center p-2 sm:p-4 backdrop-blur-md overflow-y-auto">
               <motion.div initial={{scale:0.9, opacity:0}} animate={{scale:1, opacity:1}} exit={{scale:0.9, opacity:0}} className="bg-white w-full max-w-2xl rounded-[2.5rem] overflow-hidden shadow-2xl my-auto">
-                <div className="p-6 bg-slate-900 text-white flex justify-between items-center">
+                <div className="p-6 bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white flex justify-between items-center">
                    <div className="flex items-center gap-3">
                       <ShieldCheck className="text-red-500" size={24}/>
                       <div>
@@ -1131,30 +1331,30 @@ export default function AdminDashboard() {
                         </div>
                         <div className="grid grid-cols-3 gap-3">
                            <div>
-                              <label className="text-[10px] font-black text-slate-400 uppercase">Cash Awal</label>
+                              <label className="text-[10px] font-black text-slate-600 dark:text-slate-400 uppercase">Cash Awal</label>
                               <input type="number" className="w-full p-3 bg-slate-50 border rounded-xl font-bold" value={auditData.initialCash} onChange={e=>setAuditData({...auditData, initialCash: e.target.value})}/>
                            </div>
                            <div>
-                              <label className="text-[10px] font-black text-slate-400 uppercase">APK Awal</label>
+                              <label className="text-[10px] font-black text-slate-600 dark:text-slate-400 uppercase">APK Awal</label>
                               <input type="number" className="w-full p-3 bg-slate-50 border rounded-xl font-bold" value={auditData.initialApk} onChange={e=>setAuditData({...auditData, initialApk: e.target.value})}/>
                            </div>
                            <div>
-                              <label className="text-[10px] font-black text-slate-400 uppercase">Bank Awal</label>
+                              <label className="text-[10px] font-black text-slate-600 dark:text-slate-400 uppercase">Bank Awal</label>
                               <input type="number" className="w-full p-3 bg-slate-50 border rounded-xl font-bold" value={auditData.initialSeabank} onChange={e=>setAuditData({...auditData, initialSeabank: e.target.value})}/>
                            </div>
                         </div>
                          <div className="space-y-3">
-                           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pengecekan Stok Awal Barang</p>
+                           <p className="text-[10px] font-black text-slate-600 dark:text-slate-400 uppercase tracking-widest">Pengecekan Stok Awal Barang</p>
                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                               {sortedStokProducts.map(p => (
                                 <div key={p.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
-                                   <span className="text-[11px] font-black text-slate-700">{p.name}</span>
+                                   <span className="text-[11px] font-black text-slate-300 dark:text-slate-700">{p.name}</span>
                                    <input type="number" className="w-16 p-1.5 bg-white border rounded-lg text-center font-bold text-xs" value={auditData.initialStocks[p.id] ?? p.stock} onChange={e=>setAuditData({...auditData, initialStocks: {...auditData.initialStocks, [p.id]: e.target.value}})}/>
                                 </div>
                               ))}
                            </div>
                         </div>
-                        <button onClick={()=>setAuditStep(2)} className="w-full py-4 bg-slate-900 text-white font-black rounded-2xl shadow-lg mt-4">Lanjut ke Transaksi Digital &gt;</button>
+                        <button onClick={()=>setAuditStep(2)} className="w-full py-4 bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white font-black rounded-2xl shadow-lg mt-4">Lanjut ke Transaksi Digital &gt;</button>
                      </div>
                    )}
 
@@ -1187,17 +1387,17 @@ export default function AdminDashboard() {
                              <div key={t.id} className="flex justify-between items-center p-3 bg-white border rounded-xl shadow-sm">
                                 <div>
                                    <p className="text-xs font-black">{t.name} <span className="text-[10px] text-blue-500 font-bold">({t.action})</span></p>
-                                   <p className="text-[10px] text-slate-400">Nom: {Number(t.nominal).toLocaleString()} | Fee: {Number(t.fee).toLocaleString()}</p>
+                                   <p className="text-[10px] text-slate-600 dark:text-slate-400">Nom: {Number(t.nominal).toLocaleString()} | Fee: {Number(t.fee).toLocaleString()}</p>
                                 </div>
                                 <button onClick={()=>setAuditData({...auditData, digitalTrans: auditData.digitalTrans.filter(x=>x.id!==t.id)})} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={14}/></button>
                              </div>
                            ))}
-                           {auditData.digitalTrans.length === 0 && <p className="text-center text-slate-400 text-xs italic">Belum ada transaksi diinput</p>}
+                           {auditData.digitalTrans.length === 0 && <p className="text-center text-slate-600 dark:text-slate-400 text-xs italic">Belum ada transaksi diinput</p>}
                         </div>
 
                         <div className="flex gap-3 mt-6">
-                           <button onClick={()=>setAuditStep(1)} className="flex-1 py-4 bg-slate-100 text-slate-600 font-black rounded-2xl">&lt; Kembali</button>
-                           <button onClick={()=>setAuditStep(3)} className="flex-1 py-4 bg-slate-900 text-white font-black rounded-2xl shadow-lg text-sm">Lanjut ke Stok Fisik &gt;</button>
+                           <button onClick={()=>setAuditStep(1)} className="flex-1 py-4 bg-slate-100 text-slate-400 dark:text-slate-600 font-black rounded-2xl">&lt; Kembali</button>
+                           <button onClick={()=>setAuditStep(3)} className="flex-1 py-4 bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-white font-black rounded-2xl shadow-lg text-sm">Lanjut ke Stok Fisik &gt;</button>
                         </div>
                      </div>
                    )}
@@ -1216,7 +1416,7 @@ export default function AdminDashboard() {
                                <div key={p.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
                                   <div className="flex justify-between items-center mb-3">
                                      <p className="text-xs font-black text-slate-800">{p.name}</p>
-                                     <span className="text-[10px] font-bold text-slate-400">Awal: {auditData.initialStocks[p.id] ?? p.stock}</span>
+                                     <span className="text-[10px] font-bold text-slate-600 dark:text-slate-400">Awal: {auditData.initialStocks[p.id] ?? p.stock}</span>
                                   </div>
                                   <div className="grid grid-cols-2 gap-4">
                                      <div>
@@ -1234,7 +1434,7 @@ export default function AdminDashboard() {
                         </div>
 
                         <div className="flex gap-3 mt-6">
-                           <button onClick={()=>setAuditStep(2)} className="flex-1 py-4 bg-slate-100 text-slate-600 font-black rounded-2xl">&lt; Kembali</button>
+                           <button onClick={()=>setAuditStep(2)} className="flex-1 py-4 bg-slate-100 text-slate-400 dark:text-slate-600 font-black rounded-2xl">&lt; Kembali</button>
                            <button onClick={()=>setAuditStep(4)} className="flex-1 py-4 bg-red-600 text-white font-black rounded-2xl shadow-lg text-sm">Review Hasil Audit &gt;</button>
                         </div>
                      </div>
@@ -1247,8 +1447,8 @@ export default function AdminDashboard() {
                            <p className="text-xs font-black uppercase">Final Review: Rekapitulasi Manual</p>
                         </div>
                         
-                        <div className="bg-slate-900 rounded-[2rem] p-6 text-white space-y-4">
-                           <div className="flex justify-between items-center border-b border-white/10 pb-3">
+                        <div className="bg-slate-100 dark:bg-slate-900 rounded-[2rem] p-6 text-slate-900 dark:text-white space-y-4">
+                           <div className="flex justify-between items-center border-b border-slate-900/10 dark:border-white/10 pb-3">
                               <span className="text-[10px] font-black uppercase opacity-60">Estimasi Saldo Kas</span>
                               <span className="text-xl font-black">
                                  Rp {(
@@ -1262,15 +1462,15 @@ export default function AdminDashboard() {
                                  ).toLocaleString()}
                               </span>
                            </div>
-                           <div className="flex justify-between items-center border-b border-white/10 pb-3">
+                           <div className="flex justify-between items-center border-b border-slate-900/10 dark:border-white/10 pb-3">
                               <span className="text-[10px] font-black uppercase opacity-60">Estimasi Saldo APK</span>
-                              <span className="text-xl font-black text-emerald-400">
+                              <span className="text-xl font-black text-emerald-600 dark:text-emerald-400">
                                  Rp {(Number(auditData.initialApk) - auditData.digitalTrans.reduce((acc, t) => acc + (t.action === 'isi' ? Number(t.cost || t.nominal) : 0), 0)).toLocaleString()}
                               </span>
                            </div>
                            <div className="flex justify-between items-center">
                               <span className="text-[10px] font-black uppercase opacity-60">Estimasi Saldo Bank</span>
-                              <span className="text-xl font-black text-blue-400">
+                              <span className="text-xl font-black text-blue-600 dark:text-blue-400">
                                  Rp {(
                                    Number(auditData.initialSeabank) + 
                                    auditData.digitalTrans.reduce((acc, t) => acc + (t.action === 'tarik' ? (Number(t.nominal)+Number(t.fee)) : t.action === 'transfer' ? -Number(t.cost||t.nominal) : 0), 0)
@@ -1284,7 +1484,7 @@ export default function AdminDashboard() {
                         </div>
 
                         <div className="flex gap-3 mt-6">
-                           <button onClick={()=>setAuditStep(3)} className="flex-1 py-4 bg-slate-100 text-slate-600 font-black rounded-2xl">&lt; Edit Lagi</button>
+                           <button onClick={()=>setAuditStep(3)} className="flex-1 py-4 bg-slate-100 text-slate-400 dark:text-slate-600 font-black rounded-2xl">&lt; Edit Lagi</button>
                            <button disabled={loadingAudit} onClick={handleCommitAudit} className="flex-1 py-4 bg-red-600 text-white font-black rounded-2xl shadow-lg shadow-red-500/30 flex items-center justify-center gap-2">
                               {loadingAudit ? <Loader2 className="animate-spin" size={18}/> : <ShieldCheck size={18}/>} Konfirmasi & Overwrite
                            </button>
@@ -1306,73 +1506,121 @@ export default function AdminDashboard() {
                        <h3 className="font-black italic uppercase tracking-widest text-sm">Detail Closing Shift</h3>
                        <button onClick={()=>setSelectedClosing(null)} className="p-1 hover:bg-white/20 rounded-lg"><X size={20}/></button>
                     </div>
-                    <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
-                        <div className="grid grid-cols-2 gap-2 text-xs font-bold">
-                           <div className="bg-slate-50 p-3 rounded-xl"><span className="text-slate-400 text-[10px] uppercase">User</span><p className="text-slate-800">{selectedClosing.user}</p></div>
-                           <div className="bg-slate-50 p-3 rounded-xl"><span className="text-slate-400 text-[10px] uppercase">Shift</span><p className="text-slate-800">{selectedClosing.shift}</p></div>
-                           <div className="bg-blue-50 p-3 rounded-xl"><span className="text-blue-400 text-[10px] uppercase">Setoran</span><p className="text-blue-700">Rp {selectedClosing.setoran?.toLocaleString()}</p></div>
-                           <div className={`p-3 rounded-xl ${(selectedClosing.selisih || 0) >= 0 ? 'bg-emerald-50':'bg-red-50'}`}>
-                             <span className="text-[10px] uppercase text-slate-400">Selisih</span>
-                             <p className={`${(selectedClosing.selisih || 0) >= 0 ? 'text-emerald-700':'text-red-700'}`}>Rp {selectedClosing.selisih?.toLocaleString()}</p>
+                       <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+                           <div className="grid grid-cols-2 gap-2 text-xs font-bold">
+                              <div className="bg-slate-50 p-3 rounded-xl"><span className="text-slate-600 dark:text-slate-400 text-[10px] uppercase">User</span><p className="text-slate-800">{selectedClosing.user}</p></div>
+                              <div className="bg-slate-50 p-3 rounded-xl"><span className="text-slate-600 dark:text-slate-400 text-[10px] uppercase">Shift</span><p className="text-slate-800">{selectedClosing.shift}</p></div>
+                              <div className="bg-blue-50 p-3 rounded-xl"><span className="text-blue-600 dark:text-blue-400 text-[10px] uppercase">Setoran</span><p className="text-blue-700">Rp {selectedClosing.setoran?.toLocaleString()}</p></div>
+                              <div className={`p-3 rounded-xl ${(selectedClosing.selisih || 0) >= 0 ? 'bg-emerald-50':'bg-red-50'}`}>
+                                <span className="text-[10px] uppercase text-slate-600 dark:text-slate-400">Selisih</span>
+                                <p className={`${(selectedClosing.selisih || 0) >= 0 ? 'text-emerald-700':'text-red-700'}`}>Rp {selectedClosing.selisih?.toLocaleString()}</p>
+                              </div>
+                              <div className="bg-slate-50 p-3 rounded-xl col-span-2">
+                                <span className="text-slate-600 dark:text-slate-400 text-[10px] uppercase block">ID Dokumen</span>
+                                <p className="text-slate-800 font-mono select-all text-xs break-all">{selectedClosing.id}</p>
+                              </div>
                            </div>
-                        </div>
-                        {selectedClosing.totalProfit !== undefined && (
-                          <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100 text-center">
-                            <span className="text-[10px] font-black text-emerald-400 uppercase">Total Laba Shift</span>
-                            <p className="text-lg font-black text-emerald-700">Rp {selectedClosing.totalProfit?.toLocaleString()}</p>
-                          </div>
-                        )}
-                        {selectedClosing.physicalSales && selectedClosing.physicalSales.length > 0 && (
-                          <div className="p-4 bg-orange-50 rounded-2xl border border-dashed border-orange-200">
-                             <p className="text-[10px] uppercase font-black text-orange-400 mb-2 tracking-widest text-center">Penjualan Produk Fisik Terekam</p>
-                             <div className="space-y-2 max-h-32 overflow-y-auto">
-                               {selectedClosing.physicalSales.map((s, i) => (
-                                 <div key={i} className="flex flex-col border-b border-orange-100 pb-1 last:border-0 last:pb-0">
-                                    <div className="flex justify-between text-[11px] font-medium">
-                                      <span className="text-slate-700 truncate flex-1 font-bold">{s.name} <span className="text-orange-500 bg-orange-100 px-1 rounded ml-1">x{s.sold}</span></span>
-                                      <span className="text-orange-600 font-black ml-2">Rp {s.revenue?.toLocaleString()}</span>
-                                    </div>
-                                    <span className="text-[9px] text-orange-400 italic">Laba: Rp {s.profit?.toLocaleString()}</span>
-                                 </div>
-                               ))}
+                           {selectedClosing.totalProfit !== undefined && (
+                             <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100 text-center">
+                               <span className="text-[10px] font-black text-emerald-600 dark:text-emerald-400 uppercase">Total Laba Shift</span>
+                               <p className="text-lg font-black text-emerald-700">Rp {selectedClosing.totalProfit?.toLocaleString()}</p>
                              </div>
-                          </div>
-                        )}
-                        {selectedClosing.cashIn !== undefined && (
-                          <div className="grid grid-cols-2 gap-2 text-xs font-bold">
-                            <div className="bg-emerald-50 p-3 rounded-xl"><span className="text-[10px] uppercase text-emerald-400">Cash In</span><p className="text-emerald-700">Rp {selectedClosing.cashIn?.toLocaleString()}</p></div>
-                            <div className="bg-red-50 p-3 rounded-xl"><span className="text-[10px] uppercase text-red-400">Cash Out</span><p className="text-red-700">Rp {selectedClosing.cashOut?.toLocaleString()}</p></div>
-                          </div>
-                        )}
-                        <div className="p-4 bg-slate-100 rounded-2xl border border-dashed border-slate-300">
-                           <p className="text-[10px] uppercase font-black text-slate-400 mb-2 tracking-widest text-center">Transaksi dalam shift ini</p>
-                           <div className="space-y-2 max-h-40 overflow-y-auto">
-                             {transactions.filter(t => t.shift === selectedClosing.shift && t.user === selectedClosing.user && t.closingId === selectedClosing.id).map(t => (
-                               <div key={t.id} className="flex justify-between text-[11px] font-medium">
-                                 <span className="text-slate-600 truncate flex-1">{t.items?.map(i=>i.name).join(', ') || t.type}</span>
-                                 <span className="text-blue-600 font-bold ml-2">Rp {t.total?.toLocaleString()}</span>
+                           )}
+                           {selectedClosing.finalBalances && (
+                             <div className="p-3 bg-indigo-50/70 rounded-2xl border border-indigo-100">
+                               <p className="text-[10px] font-black text-indigo-600 uppercase tracking-widest text-center mb-2">Posisi Saldo Terakhir</p>
+                               <div className="grid grid-cols-2 gap-2 text-xs font-bold">
+                                 <div className="bg-white p-2.5 rounded-xl flex justify-between items-center">
+                                   <span className="text-[10px] uppercase text-slate-500">Cash</span>
+                                   <span className="text-slate-800">Rp {(selectedClosing.finalBalances.cash || 0).toLocaleString()}</span>
+                                 </div>
+                                 <div className="bg-white p-2.5 rounded-xl flex justify-between items-center">
+                                   <span className="text-[10px] uppercase text-slate-500">Bank</span>
+                                   <span className="text-slate-800">Rp {(selectedClosing.finalBalances.seabank || 0).toLocaleString()}</span>
+                                 </div>
+                                 <div className="bg-white p-2.5 rounded-xl flex justify-between items-center">
+                                   <span className="text-[10px] uppercase text-slate-500">APK</span>
+                                   <span className="text-slate-800">Rp {(selectedClosing.finalBalances.apk || 0).toLocaleString()}</span>
+                                 </div>
+                                 <div className="bg-white p-2.5 rounded-xl flex justify-between items-center">
+                                   <span className="text-[10px] uppercase text-slate-500">QRIS</span>
+                                   <span className="text-slate-800">Rp {(selectedClosing.finalBalances.qris || 0).toLocaleString()}</span>
+                                 </div>
                                </div>
-                             ))}
-                             {transactions.filter(t => t.shift === selectedClosing.shift && t.user === selectedClosing.user && t.closingId === selectedClosing.id).length === 0 && (
-                               <p className="text-center text-slate-400 text-[11px] italic">Transaksi terkait tersimpan di database</p>
-                             )}
+                             </div>
+                           )}
+                           {selectedClosing.physicalSales && selectedClosing.physicalSales.length > 0 && (
+                             <div className="p-4 bg-orange-50 rounded-2xl border border-dashed border-orange-200">
+                                <p className="text-[10px] uppercase font-black text-orange-600 dark:text-orange-400 mb-2 tracking-widest text-center">Penjualan Produk Fisik Terekam</p>
+                                <div className="space-y-2 max-h-32 overflow-y-auto">
+                                  {selectedClosing.physicalSales.map((s, i) => (
+                                    <div key={i} className="flex flex-col border-b border-orange-100 pb-1 last:border-0 last:pb-0">
+                                       <div className="flex justify-between text-[11px] font-medium">
+                                         <span className="text-slate-300 dark:text-slate-700 truncate flex-1 font-bold">{s.name} <span className="text-orange-500 bg-orange-100 px-1 rounded ml-1">x{s.sold}</span></span>
+                                         <span className="text-orange-600 font-black ml-2">Rp {s.revenue?.toLocaleString()}</span>
+                                       </div>
+                                       <span className="text-[9px] text-orange-600 dark:text-orange-400 italic">Laba: Rp {s.profit?.toLocaleString()}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                             </div>
+                           )}
+                           {selectedClosing.expenseDetails && selectedClosing.expenseDetails.length > 0 && (
+                             <div className="p-4 bg-red-50 dark:bg-red-950/20 rounded-2xl border border-dashed border-red-200 dark:border-red-800/30">
+                                <p className="text-[10px] uppercase font-black text-red-600 dark:text-red-400 mb-2 tracking-widest text-center">Rincian Pengeluaran (Cash Out)</p>
+                                <div className="space-y-2 max-h-32 overflow-y-auto">
+                                  {selectedClosing.expenseDetails.map((exp, i) => (
+                                    <div key={i} className="flex justify-between text-[11px] font-medium border-b border-red-100 dark:border-red-900/30 pb-1 last:border-0 last:pb-0">
+                                       <span className="text-slate-700 dark:text-slate-300 truncate flex-1 font-bold">{exp.name}</span>
+                                       <span className="text-red-600 dark:text-red-400 font-black ml-2">Rp {exp.amount?.toLocaleString()}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                             </div>
+                           )}
+                           {selectedClosing.cashIn !== undefined && (
+                             <div className="grid grid-cols-2 gap-2 text-xs font-bold">
+                               <div className="bg-emerald-50 p-3 rounded-xl"><span className="text-[10px] uppercase text-emerald-600 dark:text-emerald-400">Cash In</span><p className="text-emerald-700">Rp {selectedClosing.cashIn?.toLocaleString()}</p></div>
+                               <div className="bg-red-50 p-3 rounded-xl"><span className="text-[10px] uppercase text-red-600 dark:text-red-400">Cash Out</span><p className="text-red-700">Rp {selectedClosing.cashOut?.toLocaleString()}</p></div>
+                             </div>
+                           )}
+                           <div className="p-4 bg-slate-100 rounded-2xl border border-dashed border-slate-300">
+                              <p className="text-[10px] uppercase font-black text-slate-600 dark:text-slate-400 mb-2 tracking-widest text-center">Transaksi dalam shift ini</p>
+                              <div className="space-y-2 max-h-40 overflow-y-auto">
+                                {transactions.filter(t => t.shift === selectedClosing.shift && t.user === selectedClosing.user && t.closingId === selectedClosing.id).map(t => (
+                                  <div key={t.id} className="flex justify-between text-[11px] font-medium">
+                                    <span className="text-slate-400 dark:text-slate-600 truncate flex-1">{t.items?.map(i=>i.name).join(', ') || t.type}</span>
+                                    <span className="text-blue-600 font-bold ml-2">Rp {t.total?.toLocaleString()}</span>
+                                  </div>
+                                ))}
+                                {transactions.filter(t => t.shift === selectedClosing.shift && t.user === selectedClosing.user && t.closingId === selectedClosing.id).length === 0 && (
+                                  <p className="text-center text-slate-600 dark:text-slate-400 text-[11px] italic">Transaksi terkait tersimpan di database</p>
+                                )}
+                              </div>
                            </div>
+                           <div className="pt-4 border-t border-slate-100 flex flex-col gap-2">
+                               <button 
+                                  onClick={() => printClosingRawBT(selectedClosing)}
+                                  className="w-full py-3 px-4 bg-indigo-600 text-white font-bold rounded-2xl hover:bg-indigo-500 transition-all text-xs flex items-center justify-center gap-2 shadow-md shadow-indigo-500/20"
+                               >
+                                  <Printer size={14}/> Cetak Struk Closing
+                               </button>
+                               <div className="grid grid-cols-2 gap-2">
+                                 <button 
+                                    onClick={() => setSelectedClosing(null)}
+                                    className="py-3 px-4 bg-slate-100 text-slate-500 font-bold rounded-2xl hover:bg-slate-200 transition-all text-xs"
+                                 >
+                                    Tutup Detail
+                                 </button>
+                                 <button 
+                                    onClick={() => handleReopenShift(selectedClosing)}
+                                    className="py-3 px-4 bg-red-50 text-red-600 font-bold rounded-2xl hover:bg-red-100 transition-all text-xs flex items-center justify-center gap-2"
+                                 >
+                                    <History size={14}/> Buka Kembali Sesi
+                                 </button>
+                               </div>
+                            </div>
                         </div>
-                        <div className="pt-4 border-t border-slate-100 grid grid-cols-2 gap-3">
-                           <button 
-                              onClick={() => setSelectedClosing(null)}
-                              className="py-3 px-4 bg-slate-100 text-slate-500 font-bold rounded-2xl hover:bg-slate-200 transition-all text-xs"
-                           >
-                              Tutup Detail
-                           </button>
-                           <button 
-                              onClick={() => handleReopenShift(selectedClosing)}
-                              className="py-3 px-4 bg-red-50 text-red-600 font-bold rounded-2xl hover:bg-red-100 transition-all text-xs flex items-center justify-center gap-2"
-                           >
-                              <History size={14}/> Buka Kembali Sesi
-                           </button>
-                        </div>
-                    </div>
                  </motion.div>
               </div>
            )}
@@ -1380,7 +1628,7 @@ export default function AdminDashboard() {
 
         {/* ===================== FOOTER ===================== */}
         <div className="mt-12 pt-8 border-t border-slate-200 flex flex-col md:flex-row justify-between items-center gap-4">
-           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest italic opacity-50">Kiosk Finance System • 2026</p>
+           <p className="text-[10px] font-black text-slate-600 dark:text-slate-400 uppercase tracking-widest italic opacity-50">Kiosk Finance System • 2026</p>
            <div className="flex gap-2">
              <button onClick={handleResetData} className="text-xs font-black text-amber-600 hover:text-amber-700 flex items-center gap-2 uppercase tracking-tighter border border-amber-200 px-4 py-2 rounded-xl hover:bg-amber-50 transition-all">
                 <History size={14}/> Reset Semua Data (Transaksi, Closing, SDM)
@@ -1393,14 +1641,7 @@ export default function AdminDashboard() {
 
       </div>
       
-      {/* AI Chat Assistant 
-      <AiChat 
-        transactions={transactions} 
-        products={products} 
-        balances={balances} 
-        closings={closings} 
-      />
-      */}
+
       </div>
     </div>
   );

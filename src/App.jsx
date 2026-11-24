@@ -13,7 +13,6 @@ import { doc, getDoc } from 'firebase/firestore';
 import { RefreshCw, Sparkles, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 
-
 // Simple protection wrapper
 const OwnerOnly = ({ children }) => {
   const user = useStore(state => state.user);
@@ -25,6 +24,7 @@ function App() {
   const user = useStore(state => state.user);
   const setUser = useStore(state => state.setUser);
   const setShift = useStore(state => state.setShift);
+  const theme = useStore(state => state.theme);
   const [loading, setLoading] = useState(true);
   const [updateAvailable, setUpdateAvailable] = useState(false);
 
@@ -41,7 +41,6 @@ function App() {
           if (reg.waiting) {
             reg.waiting.postMessage({ type: 'SKIP_WAITING' });
           } else {
-            // Fallback for safety
             window.location.reload();
           }
         });
@@ -73,8 +72,14 @@ function App() {
     return () => unsub();
   }, [user, setUser]);
 
+  // Apply theme class to <html> (default light)
   useEffect(() => {
-    // Set shift only when user is available, stay static during the session
+    const root = document.documentElement;
+    if (theme === 'dark') root.classList.add('dark');
+    else root.classList.remove('dark');
+  }, [theme]);
+
+  useEffect(() => {
     if (user) {
       setShift(`Sesi ${user.name}`);
     } else {
@@ -84,9 +89,9 @@ function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center">
+      <div className="min-h-screen bg-slate-100 dark:bg-slate-900 flex flex-col items-center justify-center">
         <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
-        <p className="text-slate-400 font-bold animate-pulse tracking-widest uppercase text-xs">Menghubungkan...</p>
+        <p className="text-slate-600 dark:text-slate-400 font-bold animate-pulse tracking-widest uppercase text-xs">Menghubungkan...</p>
       </div>
     );
   }
@@ -101,7 +106,7 @@ function App() {
             exit={{ y: -100, opacity: 0 }}
             className="fixed top-4 left-4 right-4 z-[9999] flex justify-center"
           >
-            <div className="bg-slate-900/90 backdrop-blur-xl border border-white/20 px-6 py-4 rounded-[2rem] shadow-2xl flex items-center gap-4 max-w-xl text-white">
+            <div className="bg-slate-100/90 dark:bg-slate-900/90 backdrop-blur-xl border border-slate-900/20 dark:border-white/20 px-6 py-4 rounded-[2rem] shadow-2xl flex items-center gap-4 max-w-xl text-slate-900 dark:text-white">
               <div className="bg-blue-600 p-2 rounded-full ring-4 ring-blue-500/20">
                 <Sparkles size={20}/>
               </div>

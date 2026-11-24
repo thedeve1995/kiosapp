@@ -1,12 +1,13 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useStore } from '../store/useStore';
 import { useNavigate } from 'react-router-dom';
-import { LogOut, Calculator, FileCheck2, Loader2, History, AlertOctagon, Plus, ChevronRight, ChevronLeft, Check, TrendingUp, TrendingDown, Minus, Package } from 'lucide-react';
+import { LogOut, Calculator, FileCheck2, Loader2, History, AlertOctagon, Plus, ChevronRight, ChevronLeft, Check, TrendingUp, TrendingDown, Minus, Package, Printer } from 'lucide-react';
 import { db } from '../lib/firebase';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { collection, onSnapshot, doc, query, where, addDoc, serverTimestamp, writeBatch, getDocs, limit, orderBy } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
+import { printClosingRawBT } from '../lib/printClosingRawBT';
 
 const STEPS = [
   { id: 1, label: 'Rekap Shift', icon: TrendingUp },
@@ -27,6 +28,7 @@ export default function Closing() {
   const [ownerWA, setOwnerWA]     = useState('');
   const [finalStocks, setFinalStocks]       = useState({});
   const [transferAmounts, setTransferAmounts] = useState({});
+  const [closingSuccessData, setClosingSuccessData] = useState(null);
 
   // Fetch owner WA
   useEffect(() => {
@@ -46,7 +48,7 @@ export default function Closing() {
     const q = query(collection(db, 'transactions'), orderBy('timestamp', 'desc'), limit(500));
     const unsubTrans = onSnapshot(q, (snap) => {
       const allData = snap.docs.map(d => ({ ...d.data(), id: d.id }));
-      setShiftTrans(allData.filter(t => !t.closed && t.status !== 'cancelled' && t.type !== 'adjustment'));
+      setShiftTrans(allData.filter(t => !t.closed && t.status !== 'cancelled' && t.status !== 'voided_by_audit' && t.type !== 'adjustment'));
     });
     const unsubProd = onSnapshot(collection(db, 'products'), (snapshot) => {
       if (!snapshot.empty) setProducts(snapshot.docs.map(doc => ({ firebaseId: doc.id, ...doc.data() })));
@@ -57,7 +59,7 @@ export default function Closing() {
 
   const shiftSales = shiftTrans;
 
-  const { realPemasukan, realPengeluaran, realProfit, kasbonBaru, kasbonDilunasi, digitalTransfer } = shiftSales.reduce((acc, t) => {
+  const { realPemasukan, realPengeluaran, realProfit, kasbonBaru, kasbonDilunasi, digitalTransfer, qrisTransfer } = shiftSales.reduce((acc, t) => {
     if (t.type === 'pelunasan_kasbon') {
       acc.kasbonDilunasi += (t.total || 0);
       acc.realPemasukan  += (t.total || 0);
@@ -72,11 +74,13 @@ export default function Closing() {
         acc.realPengeluaran += nominal;
         if (item.feePaidVia === 'cash')     acc.realPemasukan += fee;
         else if (item.feePaidVia === 'transfer') { acc.realPemasukan += fee; acc.digitalTransfer += fee; }
+        else if (item.feePaidVia === 'qris') { acc.realPemasukan += fee; acc.qrisTransfer += fee; }
       } else if (item.action === 'restock' || t.type === 'expenditure') {
         acc.realPengeluaran += total;
       } else {
         if (t.paymentMethod === 'kasbon')      acc.kasbonBaru += total;
         else if (t.paymentMethod === 'transfer') { acc.realPemasukan += total; acc.digitalTransfer += total; }
+        else if (t.paymentMethod === 'qris') { acc.realPemasukan += total; acc.qrisTransfer += total; }
         else acc.realPemasukan += total;
       }
     });
@@ -91,7 +95,7 @@ export default function Closing() {
       : (Number(t.profit) || 0));
     acc.realProfit += transProfit;
     return acc;
-  }, { realPemasukan: 0, realPengeluaran: 0, realProfit: 0, kasbonBaru: 0, kasbonDilunasi: 0, digitalTransfer: 0 });
+  }, { realPemasukan: 0, realPengeluaran: 0, realProfit: 0, kasbonBaru: 0, kasbonDilunasi: 0, digitalTransfer: 0, qrisTransfer: 0 });
 
   const physicalProducts = useMemo(() =>
     products.filter(p => p.type === 'stok').sort((a, b) => {
@@ -119,9 +123,59 @@ export default function Closing() {
   const finalPemasukan = realPemasukan + physicalPemasukan + kasbonBaru;
   const finalProfit    = realProfit + physicalProfit;
 
+  const expenseLog = useMemo(() => {
+    const list = [];
+    let tarikTunaiTotal = 0;
+    let tarikTunaiCount = 0;
+
+    shiftSales.forEach(t => {
+      if (t.type === 'pelunasan_kasbon') return;
+
+      if (t.type === 'expenditure') {
+        if (t.items && t.items.length > 0) {
+          t.items.forEach(it => {
+            const amt = it.total || ((it.price || 0) * (it.qty || 1));
+            list.push({
+              name: it.name || 'Pengeluaran Toko',
+              amount: amt
+            });
+          });
+        } else {
+          list.push({
+            name: t.name || 'Pengeluaran Toko',
+            amount: t.total || 0
+          });
+        }
+      } else {
+        t.items?.forEach(it => {
+          if (it.action === 'restock') {
+            const amt = it.total || ((it.price || 0) * (it.qty || 1));
+            list.push({
+              name: it.name || 'Restock Barang',
+              amount: amt
+            });
+          } else if (it.action === 'tarik') {
+            const q = it.qty || 1;
+            tarikTunaiTotal += (it.nominal || 0) * q;
+            tarikTunaiCount += 1;
+          }
+        });
+      }
+    });
+
+    if (tarikTunaiTotal > 0) {
+      list.push({
+        name: `Tarik Tunai (${tarikTunaiCount} tx - Kas Keluar)`,
+        amount: tarikTunaiTotal
+      });
+    }
+
+    return list;
+  }, [shiftSales]);
+
   const totalPhysicalTransfer = physicalProducts.reduce((sum, p) => sum + (parseFloat(transferAmounts[p.firebaseId]) || 0), 0);
   const modalAwalShift = balances.modalShift || 1000000;
-  const expectedCash   = modalAwalShift + finalPemasukan - realPengeluaran - totalPhysicalTransfer - digitalTransfer - kasbonBaru;
+  const expectedCash   = modalAwalShift + finalPemasukan - realPengeluaran - totalPhysicalTransfer - digitalTransfer - qrisTransfer - kasbonBaru;
 
   const rawSetoran  = (parseFloat(actualCash) || 0) - modalAwalShift;
   const setoran     = Math.max(0, rawSetoran);
@@ -140,12 +194,29 @@ export default function Closing() {
     try {
       const batch = writeBatch(db);
       const closingRef = doc(collection(db, 'shift_closings'));
+      const todayStr = new Date().toLocaleDateString('id-ID');
+      const newCashBalance    = parseFloat(actualCash) - setoran;
+      const newSeabankBalance = (Number(balances.seabank) || 0) + totalPhysicalTransfer;
+      const apkBalance        = Number(balances.apk) || 0;
+      const qrisBalance       = balances.lastQrisResetDate === todayStr
+        ? (Number(balances.qris) || 0)
+        : (qrisTransfer > 0 ? (Number(balances.qris) || qrisTransfer) : 0);
+      const finalBalances = {
+        cash: newCashBalance,
+        seabank: newSeabankBalance,
+        apk: apkBalance,
+        qris: qrisBalance
+      };
+      const totalSaldoAkhir = newCashBalance + newSeabankBalance + apkBalance + qrisBalance;
+
       const closingData = {
         shift, user: user.name, modalAwal: modalAwalShift,
         pemasukan: realPemasukan, pengeluaran: realPengeluaran,
         expectedCash, actualCash: parseFloat(actualCash), selisih, setoran,
         totalProfit: finalProfit, kasbonBaru, kasbonDilunasi, note: keterangan,
-        timestamp: serverTimestamp(), physicalSales: physicalSalesLog
+        timestamp: serverTimestamp(), physicalSales: physicalSalesLog,
+        expenseDetails: expenseLog,
+        finalBalances
       };
       batch.set(closingRef, closingData);
 
@@ -175,8 +246,6 @@ export default function Closing() {
       });
 
       const balanceRef   = doc(db, 'balances', 'current');
-      const newCashBalance    = parseFloat(actualCash) - setoran;
-      const newSeabankBalance = (balances.seabank || 0) + totalPhysicalTransfer;
       batch.update(balanceRef, { cash: newCashBalance, seabank: newSeabankBalance });
 
       await batch.commit();
@@ -196,8 +265,11 @@ export default function Closing() {
       const physicalText = physicalSalesLog.length > 0 ? physicalSalesLog.map(s => `- ${s.name}: ${s.sold}x (Laba: Rp ${s.profit.toLocaleString()})`).join('\n') : '- (Tidak ada penjualan fisik)';
       const restockNeeded = physicalProducts.filter(p => (finalStocks[p.firebaseId] !== undefined ? Number(finalStocks[p.firebaseId]) : p.stock) < 3);
       const restockText  = restockNeeded.length > 0 ? restockNeeded.map(p => { const sisa = (finalStocks[p.firebaseId] !== undefined ? Number(finalStocks[p.firebaseId]) : p.stock); return `- ${p.name} (Sisa: ${sisa}). Modal: Rp ${(p.costPrice || 0).toLocaleString()}/unit`; }).join('\n') : '- (Stok masih aman semua)';
+      const expenseText  = expenseLog.length > 0
+        ? expenseLog.map(e => `- ${e.name}: Rp ${e.amount.toLocaleString()}`).join('\n') + `\nTotal: Rp ${realPengeluaran.toLocaleString()}`
+        : '- (Tidak ada pengeluaran)';
 
-      const waText = `*LAPORAN CLOSING SESI*\n--------------------------\nPetugas: ${user.name}\nShift: ${shift}\nTanggal: ${new Date().toLocaleDateString('id-ID')}\n\n*PENJUALAN FISIK (STOK):*\n${physicalText}\nSubtotal Laba Fisik: Rp ${physicalProfit.toLocaleString()}\n\n*RINGKASAN DIGITAL:*\n${digitalText}\nSubtotal Laba Digital: Rp ${realProfit.toLocaleString()}\n\n*PENGELUARAN (CASH OUT):*\n- Total: Rp ${realPengeluaran.toLocaleString()}\n\n*TARGET BELANJA (STOK TIPIS):*\n${restockText}\n\n*REKAPITULASI AKHIR:*\nModal Awal: Rp ${modalAwalShift.toLocaleString()}\n${kasbonBaru > 0 ? `Piutang (Kasbon Baru): Rp ${kasbonBaru.toLocaleString()}\n` : ''}${kasbonDilunasi > 0 ? `Pelunasan Kasbon (Masuk Laci): Rp ${kasbonDilunasi.toLocaleString()}\n` : ''}Sistem Final (Expected): Rp ${expectedCash.toLocaleString()}\nFisik Laci: Rp ${parseFloat(actualCash).toLocaleString()}\nSelisih: ${selisih > 0 ? '+' : ''}Rp ${selisih.toLocaleString()}\n--------------------------\n*ESTIMASI TOTAL LABA: Rp ${finalProfit.toLocaleString()}*\n*SETORAN KE OWNER: Rp ${setoran.toLocaleString()}*${isBelowModal ? `\n\n_Keterangan: ${keterangan}_` : ''}\n\nTerima kasih.`;
+      const waText = `*LAPORAN CLOSING SESI*\n--------------------------\nPetugas: ${user.name}\nShift: ${shift}\nTanggal: ${new Date().toLocaleDateString('id-ID')}\n\n*PENJUALAN FISIK (STOK):*\n${physicalText}\nSubtotal Laba Fisik: Rp ${physicalProfit.toLocaleString()}\n\n*RINGKASAN DIGITAL:*\n${digitalText}\nSubtotal Laba Digital: Rp ${realProfit.toLocaleString()}\n\n*PENGELUARAN (CASH OUT):*\n${expenseText}\n\n*TARGET BELANJA (STOK TIPIS):*\n${restockText}\n\n*REKAPITULASI AKHIR:*\nModal Awal: Rp ${modalAwalShift.toLocaleString()}\n${kasbonBaru > 0 ? `Piutang (Kasbon Baru): Rp ${kasbonBaru.toLocaleString()}\n` : ''}${kasbonDilunasi > 0 ? `Pelunasan Kasbon (Masuk Laci): Rp ${kasbonDilunasi.toLocaleString()}\n` : ''}${qrisTransfer > 0 ? `Mutasi Masuk QRIS: Rp ${qrisTransfer.toLocaleString()}\n` : ''}Sistem Final (Expected): Rp ${expectedCash.toLocaleString()}\nFisik Laci: Rp ${parseFloat(actualCash).toLocaleString()}\nSelisih: ${selisih > 0 ? '+' : ''}Rp ${selisih.toLocaleString()}\n--------------------------\n*ESTIMASI TOTAL LABA: Rp ${finalProfit.toLocaleString()}*\n*SETORAN KE OWNER: Rp ${setoran.toLocaleString()}*${isBelowModal ? `\n\n_Keterangan: ${keterangan}_` : ''}\n\n*POSISI SALDO TERAKHIR:*\n- Cash: Rp ${newCashBalance.toLocaleString()}\n- Bank: Rp ${newSeabankBalance.toLocaleString()}\n- APK: Rp ${apkBalance.toLocaleString()}\n- QRIS: Rp ${qrisBalance.toLocaleString()}\n*Total Saldo: Rp ${totalSaldoAkhir.toLocaleString()}*\n\nTerima kasih.`;
 
       // PDF
       try {
@@ -217,8 +289,15 @@ export default function Closing() {
         docPdf.setFontSize(14); docPdf.text('Penjualan Fisik (Stok)', 14, nextY);
         const physTableBody = physicalSalesLog.map(log => [log.name, `${log.sold} pcs`, `Rp ${log.revenue.toLocaleString()}`, `Rp ${log.profit.toLocaleString()}`]);
         autoTable(docPdf, { startY: nextY + 5, head: [['Produk', 'Terjual', 'Omset (Rp)', 'Laba (Rp)']], body: physTableBody.length > 0 ? physTableBody : [['(Tidak ada penjualan fisik)', '-', '-', '-']], theme: 'grid', headStyles: { fillColor: [245, 158, 11] }, bodyStyles: { fontSize: 10 }, margin: { left: 14 } });
+        
         nextY = docPdf.lastAutoTable.finalY + 15;
-        if (nextY > 250) { docPdf.addPage(); nextY = 20; }
+        if (nextY > 230) { docPdf.addPage(); nextY = 20; }
+        docPdf.setFontSize(14); docPdf.text('Rincian Pengeluaran (Cash Out)', 14, nextY);
+        const expenseTableBody = expenseLog.map(log => [log.name, `Rp ${log.amount.toLocaleString()}`]);
+        autoTable(docPdf, { startY: nextY + 5, head: [['Keperluan / Keterangan', 'Nominal']], body: expenseTableBody.length > 0 ? expenseTableBody : [['(Tidak ada pengeluaran)', '-']], theme: 'grid', headStyles: { fillColor: [239, 68, 68] }, bodyStyles: { fontSize: 10 }, margin: { left: 14 } });
+
+        nextY = docPdf.lastAutoTable.finalY + 15;
+        if (nextY > 230) { docPdf.addPage(); nextY = 20; }
         docPdf.setFontSize(14); docPdf.text('Rekapitulasi Akhir', 14, nextY);
         docPdf.setFontSize(11); docPdf.setFont("helvetica", "normal");
         docPdf.text(`Modal Awal     : Rp ${modalAwalShift.toLocaleString()}`, 14, nextY + 8);
@@ -235,6 +314,19 @@ export default function Closing() {
         docPdf.setTextColor(0, 0, 0);
         docPdf.text(`Estimasi Total Laba : Rp ${finalProfit.toLocaleString()}`, 14, yt); yt += 6;
         docPdf.text(`Setoran ke Owner    : Rp ${setoran.toLocaleString()}`, 14, yt);
+
+        yt += 12;
+        if (yt > 240) { docPdf.addPage(); yt = 20; }
+        docPdf.setFontSize(14); docPdf.setFont("helvetica", "bold");
+        docPdf.text('Posisi Saldo Terakhir', 14, yt); yt += 8;
+        docPdf.setFontSize(11); docPdf.setFont("helvetica", "normal");
+        docPdf.text(`Cash        : Rp ${newCashBalance.toLocaleString()}`, 14, yt); yt += 6;
+        docPdf.text(`Bank        : Rp ${newSeabankBalance.toLocaleString()}`, 14, yt); yt += 6;
+        docPdf.text(`APK         : Rp ${apkBalance.toLocaleString()}`, 14, yt); yt += 6;
+        docPdf.text(`QRIS        : Rp ${qrisBalance.toLocaleString()}`, 14, yt); yt += 8;
+        docPdf.setFont("helvetica", "bold");
+        docPdf.text(`Total Saldo : Rp ${totalSaldoAkhir.toLocaleString()}`, 14, yt);
+
         docPdf.save(`Closing_${shift}_${new Date().getTime()}.pdf`);
       } catch (e) { console.error("Failed to generate PDF:", e); }
 
@@ -243,8 +335,14 @@ export default function Closing() {
         const waLink = ownerWA ? `https://wa.me/${ownerWA}?text=${encodeURIComponent(waText)}` : `https://wa.me/?text=${encodeURIComponent(waText)}`;
         window.open(waLink, '_blank');
       }
-      setUser(null);
-      navigate('/login');
+
+      setClosingSuccessData({
+        ...closingData,
+        digitalSummary: digitalSummary.groups,
+        realProfit,
+        qrisTransfer,
+        digitalTransfer
+      });
     } catch (error) {
       console.error(error);
       alert("Gagal menyimpan laporan closing. Silakan coba lagi.");
@@ -255,9 +353,9 @@ export default function Closing() {
 
   // ======================== JSX ========================
   return (
-    <div className="min-h-full bg-slate-900 pb-4">
+    <div className="min-h-full bg-slate-100 dark:bg-slate-900 pb-4">
       {/* Step Indicator */}
-      <div className="sticky top-0 z-20 bg-slate-900/95 backdrop-blur border-b border-slate-800/80 px-4 py-3">
+      <div className="sticky top-0 z-20 bg-slate-100/95 dark:bg-slate-900/95 backdrop-blur border-b border-slate-200/80 dark:border-slate-800/80 px-4 py-3">
         <div className="flex items-center justify-center gap-0 max-w-sm mx-auto">
           {STEPS.map((s, idx) => {
             const isActive   = step === s.id;
@@ -271,17 +369,17 @@ export default function Closing() {
                   <div className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
                     isActive ? 'bg-indigo-600 shadow-lg shadow-indigo-500/30' :
                     isDone   ? 'bg-emerald-500/20 border border-emerald-500/40' :
-                               'bg-slate-800 border border-slate-700/50'
+                               'bg-white dark:bg-slate-800 border border-slate-200/50 dark:border-slate-700/50'
                   }`}>
-                    {isDone ? <Check size={16} className="text-emerald-400" /> :
-                      <s.icon size={16} className={isActive ? 'text-white' : 'text-slate-500'} />}
+                    {isDone ? <Check size={16} className="text-emerald-600 dark:text-emerald-400" /> :
+                      <s.icon size={16} className={isActive ? 'text-slate-900 dark:text-white' : 'text-slate-500'} />}
                   </div>
-                  <span className={`text-[9px] font-black uppercase tracking-widest ${isActive ? 'text-indigo-400' : isDone ? 'text-emerald-400' : 'text-slate-600'}`}>
+                  <span className={`text-[9px] font-black uppercase tracking-widest ${isActive ? 'text-indigo-600 dark:text-indigo-400' : isDone ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400 dark:text-slate-600'}`}>
                     {s.label}
                   </span>
                 </button>
                 {idx < STEPS.length - 1 && (
-                  <div className={`w-10 h-px mx-2 mb-4 transition-colors ${isDone ? 'bg-emerald-500/40' : 'bg-slate-700'}`} />
+                  <div className={`w-10 h-px mx-2 mb-4 transition-colors ${isDone ? 'bg-emerald-500/40' : 'bg-slate-200 dark:bg-slate-700'}`} />
                 )}
               </div>
             );
@@ -303,19 +401,19 @@ export default function Closing() {
                 <h2 className="text-lg font-black text-center mb-5 uppercase tracking-widest">{shift}</h2>
                 <div className="grid grid-cols-2 gap-3">
                   {[
-                    { label: 'Modal Awal', value: modalAwalShift, color: 'text-white' },
-                    { label: 'Total Masuk', value: finalPemasukan, color: 'text-emerald-300' },
-                    { label: 'Total Keluar', value: realPengeluaran, color: 'text-red-300' },
+                    { label: 'Modal Awal', value: modalAwalShift, color: 'text-slate-900 dark:text-white' },
+                    { label: 'Total Masuk', value: finalPemasukan, color: 'text-emerald-600 dark:text-emerald-300' },
+                    { label: 'Total Keluar', value: realPengeluaran, color: 'text-red-600 dark:text-red-300' },
                     { label: 'Est. Laba', value: finalProfit, color: 'text-yellow-300', italic: true },
                   ].map(item => (
-                    <div key={item.label} className="bg-white/10 rounded-2xl p-3 text-center border border-white/10">
+                    <div key={item.label} className="bg-white/10 rounded-2xl p-3 text-center border border-slate-900/10 dark:border-white/10">
                       <p className="text-[9px] opacity-60 uppercase tracking-widest mb-1">{item.label}</p>
                       <p className={`font-black text-sm ${item.color} ${item.italic ? 'italic' : ''}`}>
                         Rp {item.value.toLocaleString()}
                       </p>
                     </div>
                   ))}
-                  <div className="bg-white/20 rounded-2xl p-3 col-span-2 text-center border border-white/20">
+                  <div className="bg-white/20 rounded-2xl p-3 col-span-2 text-center border border-slate-900/20 dark:border-white/20">
                     <p className="text-[9px] opacity-70 uppercase tracking-widest mb-1 font-black">Expected Cash (Sistem)</p>
                     <p className="font-black text-2xl text-yellow-300 italic">Rp {expectedCash.toLocaleString()}</p>
                   </div>
@@ -323,27 +421,27 @@ export default function Closing() {
               </div>
 
               {/* Digital Transactions summary */}
-              <div className="bg-slate-800 border border-slate-700/50 rounded-3xl p-5">
-                <h3 className="font-black text-white text-sm mb-4 flex items-center gap-2">
-                  <History size={16} className="text-indigo-400" /> Transaksi Digital
-                  <span className="ml-auto text-[10px] font-bold text-slate-500 bg-slate-700 px-2 py-0.5 rounded-full">{shiftSales.length} tx</span>
+              <div className="bg-white dark:bg-slate-800 border border-slate-200/50 dark:border-slate-700/50 rounded-3xl p-5">
+                <h3 className="font-black text-slate-900 dark:text-white text-sm mb-4 flex items-center gap-2">
+                  <History size={16} className="text-indigo-600 dark:text-indigo-400" /> Transaksi Digital
+                  <span className="ml-auto text-[10px] font-bold text-slate-500 bg-slate-200 dark:bg-slate-700 px-2 py-0.5 rounded-full">{shiftSales.length} tx</span>
                 </h3>
                 {shiftSales.length === 0 ? (
-                  <p className="text-center text-slate-600 text-xs py-4 italic">Belum ada transaksi di shift ini</p>
+                  <p className="text-center text-slate-400 dark:text-slate-600 text-xs py-4 italic">Belum ada transaksi di shift ini</p>
                 ) : (
                   <div className="space-y-2 max-h-48 overflow-y-auto">
                     {shiftSales.slice(0, 20).map(t => (
-                      <div key={t.id} className="flex justify-between items-center py-2 border-b border-slate-700/40">
+                      <div key={t.id} className="flex justify-between items-center py-2 border-b border-slate-200/40 dark:border-slate-700/40">
                         <div>
-                          <p className="text-[11px] text-slate-300 font-bold truncate max-w-[180px]">{t.items?.map(it => it.name).join(', ')}</p>
-                          <p className="text-[9px] text-slate-600">{t.timestamp ? new Date(t.timestamp.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '--'}</p>
+                          <p className="text-[11px] text-slate-700 dark:text-slate-300 font-bold truncate max-w-[180px]">{t.items?.map(it => it.name).join(', ')}</p>
+                          <p className="text-[9px] text-slate-400 dark:text-slate-600">{t.timestamp ? new Date(t.timestamp.seconds * 1000).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '--'}</p>
                         </div>
-                        <p className={`text-xs font-black ${t.type === 'expenditure' ? 'text-red-400' : 'text-white'}`}>
+                        <p className={`text-xs font-black ${t.type === 'expenditure' ? 'text-red-600 dark:text-red-400' : 'text-slate-900 dark:text-white'}`}>
                           {t.type === 'expenditure' ? '-' : ''}Rp {(t.total || 0).toLocaleString()}
                         </p>
                       </div>
                     ))}
-                    {shiftSales.length > 20 && <p className="text-center text-slate-600 text-[10px] italic">+{shiftSales.length - 20} transaksi lainnya...</p>}
+                    {shiftSales.length > 20 && <p className="text-center text-slate-400 dark:text-slate-600 text-[10px] italic">+{shiftSales.length - 20} transaksi lainnya...</p>}
                   </div>
                 )}
               </div>
@@ -353,16 +451,38 @@ export default function Closing() {
                 <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4 space-y-2">
                   {kasbonBaru > 0 && (
                     <div className="flex justify-between items-center text-sm">
-                      <span className="text-amber-400 font-bold text-xs">📝 Kasbon Baru</span>
-                      <span className="text-amber-400 font-black">Rp {kasbonBaru.toLocaleString()}</span>
+                      <span className="text-amber-600 dark:text-amber-400 font-bold text-xs">📝 Kasbon Baru</span>
+                      <span className="text-amber-600 dark:text-amber-400 font-black">Rp {kasbonBaru.toLocaleString()}</span>
                     </div>
                   )}
                   {kasbonDilunasi > 0 && (
                     <div className="flex justify-between items-center text-sm">
-                      <span className="text-emerald-400 font-bold text-xs">✓ Kasbon Dilunasi</span>
-                      <span className="text-emerald-400 font-black">Rp {kasbonDilunasi.toLocaleString()}</span>
+                      <span className="text-emerald-600 dark:text-emerald-400 font-bold text-xs">✓ Kasbon Dilunasi</span>
+                      <span className="text-emerald-600 dark:text-emerald-400 font-black">Rp {kasbonDilunasi.toLocaleString()}</span>
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Rincian Pengeluaran */}
+              {expenseLog.length > 0 && (
+                <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-4 space-y-2">
+                  <div className="flex justify-between items-center text-sm mb-1">
+                    <span className="text-red-600 dark:text-red-400 font-bold text-xs flex items-center gap-1.5">
+                      <span>💸</span> Rincian Pengeluaran (Cash Out)
+                    </span>
+                    <span className="text-red-600 dark:text-red-400 font-black">
+                      Rp {realPengeluaran.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="space-y-1.5 pt-1 border-t border-red-500/10">
+                    {expenseLog.map((exp, idx) => (
+                      <div key={idx} className="flex justify-between items-center text-xs">
+                        <span className="text-slate-700 dark:text-slate-300 font-medium truncate max-w-[200px]">{exp.name}</span>
+                        <span className="text-red-600 dark:text-red-400 font-bold ml-2">Rp {exp.amount.toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 
@@ -376,21 +496,21 @@ export default function Closing() {
           {/* ════════════ STEP 2: Input Stok Akhir ════════════ */}
           {step === 2 && (
             <motion.div key="step2" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-4">
-              <div className="bg-slate-800 border border-slate-700/50 rounded-3xl p-5">
+              <div className="bg-white dark:bg-slate-800 border border-slate-200/50 dark:border-slate-700/50 rounded-3xl p-5">
                 <div className="flex items-center gap-3 mb-1">
                   <div className="w-9 h-9 bg-amber-500/15 rounded-xl flex items-center justify-center">
-                    <Package size={18} className="text-amber-400" />
+                    <Package size={18} className="text-amber-600 dark:text-amber-400" />
                   </div>
                   <div>
-                    <h3 className="font-black text-white text-sm">Input Sisa Stok Akhir</h3>
+                    <h3 className="font-black text-slate-900 dark:text-white text-sm">Input Sisa Stok Akhir</h3>
                     <p className="text-[10px] text-slate-500 font-bold">Hitung barang di rak satu per satu</p>
                   </div>
                 </div>
               </div>
 
               {physicalProducts.length === 0 ? (
-                <div className="text-center py-12 text-slate-600">
-                  <Package size={36} className="mx-auto mb-3 text-slate-700" />
+                <div className="text-center py-12 text-slate-400 dark:text-slate-600">
+                  <Package size={36} className="mx-auto mb-3 text-slate-300 dark:text-slate-700" />
                   <p className="text-sm font-bold">Tidak ada produk stok</p>
                 </div>
               ) : (
@@ -399,27 +519,27 @@ export default function Closing() {
                     const endStock = finalStocks[p.firebaseId] !== undefined ? Number(finalStocks[p.firebaseId]) : p.stock;
                     const sold     = Math.max(0, p.stock - endStock);
                     return (
-                      <div key={p.firebaseId} className="bg-slate-800 border border-slate-700/50 rounded-2xl p-4">
+                      <div key={p.firebaseId} className="bg-white dark:bg-slate-800 border border-slate-200/50 dark:border-slate-700/50 rounded-2xl p-4">
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <p className="text-sm font-black text-white">{p.name}</p>
-                              {sold > 0 && <span className="text-[9px] font-black bg-emerald-500/15 text-emerald-400 px-2 py-0.5 rounded-lg border border-emerald-500/20">Terjual: {sold}</span>}
+                              <p className="text-sm font-black text-slate-900 dark:text-white">{p.name}</p>
+                              {sold > 0 && <span className="text-[9px] font-black bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 px-2 py-0.5 rounded-lg border border-emerald-500/20">Terjual: {sold}</span>}
                             </div>
-                            <p className="text-[10px] text-slate-600 font-bold mt-0.5">Stok Sistem: {p.stock}</p>
+                            <p className="text-[10px] text-slate-400 dark:text-slate-600 font-bold mt-0.5">Stok Sistem: {p.stock}</p>
                           </div>
                           <div className="flex items-center gap-2 ml-3 shrink-0">
-                            <button onClick={() => setFinalStocks({...finalStocks, [p.firebaseId]: Math.max(0, (Number(finalStocks[p.firebaseId] ?? p.stock)) - 1)})} className="w-8 h-8 rounded-xl bg-slate-700 text-slate-300 flex items-center justify-center hover:bg-slate-600 active:scale-90 transition-all">
+                            <button onClick={() => setFinalStocks({...finalStocks, [p.firebaseId]: Math.max(0, (Number(finalStocks[p.firebaseId] ?? p.stock)) - 1)})} className="w-8 h-8 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 flex items-center justify-center hover:bg-slate-300 dark:hover:bg-slate-600 active:scale-90 transition-all">
                               <Minus size={14} />
                             </button>
                             <input
                               type="number"
                               placeholder={p.stock.toString()}
-                              className="w-14 px-1 py-2 bg-slate-900 border border-slate-700 rounded-xl text-center font-black text-sm text-indigo-400 focus:outline-none focus:border-indigo-500"
+                              className="w-14 px-1 py-2 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-center font-black text-sm text-indigo-600 dark:text-indigo-400 focus:outline-none focus:border-indigo-500"
                               value={finalStocks[p.firebaseId] ?? ''}
                               onChange={e => setFinalStocks({...finalStocks, [p.firebaseId]: e.target.value})}
                             />
-                            <button onClick={() => setFinalStocks({...finalStocks, [p.firebaseId]: (Number(finalStocks[p.firebaseId] ?? p.stock)) + 1})} className="w-8 h-8 rounded-xl bg-slate-700 text-slate-300 flex items-center justify-center hover:bg-slate-600 active:scale-90 transition-all">
+                            <button onClick={() => setFinalStocks({...finalStocks, [p.firebaseId]: (Number(finalStocks[p.firebaseId] ?? p.stock)) + 1})} className="w-8 h-8 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 flex items-center justify-center hover:bg-slate-300 dark:hover:bg-slate-600 active:scale-90 transition-all">
                               <Plus size={14} />
                             </button>
                           </div>
@@ -427,12 +547,12 @@ export default function Closing() {
                         {sold > 0 && (
                           <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-xl px-3 py-2 flex items-center gap-2">
                             <div className="flex-1">
-                              <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Bayar via Transfer (Rp)</p>
+                              <p className="text-[9px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest">Bayar via Transfer (Rp)</p>
                               <p className="text-[9px] text-slate-500 font-bold">Max: Rp {(sold * (p.price||0)).toLocaleString()}</p>
                             </div>
                             <input
                               type="number" placeholder="0" min="0" max={sold * (p.price || 0)}
-                              className="w-24 px-2 py-1.5 bg-slate-900 border border-indigo-500/30 rounded-xl text-center font-black text-sm text-indigo-400 focus:outline-none focus:border-indigo-500"
+                              className="w-24 px-2 py-1.5 bg-slate-100 dark:bg-slate-900 border border-indigo-500/30 rounded-xl text-center font-black text-sm text-indigo-600 dark:text-indigo-400 focus:outline-none focus:border-indigo-500"
                               value={transferAmounts[p.firebaseId] ?? ''}
                               onChange={e => setTransferAmounts({...transferAmounts, [p.firebaseId]: e.target.value})}
                             />
@@ -446,22 +566,22 @@ export default function Closing() {
 
               {physicalSalesLog.length > 0 && (
                 <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-4">
-                  <p className="text-[10px] font-black text-emerald-400 uppercase tracking-widest mb-2">Penjualan Fisik Terdeteksi</p>
+                  <p className="text-[10px] font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-2">Penjualan Fisik Terdeteksi</p>
                   {physicalSalesLog.map(s => (
                     <div key={s.name} className="flex justify-between text-xs font-bold py-1 border-b border-emerald-500/10">
-                      <span className="text-slate-300">{s.name} ×{s.sold}</span>
-                      <span className="text-emerald-400">+Rp {s.revenue.toLocaleString()}</span>
+                      <span className="text-slate-700 dark:text-slate-300">{s.name} ×{s.sold}</span>
+                      <span className="text-emerald-600 dark:text-emerald-400">+Rp {s.revenue.toLocaleString()}</span>
                     </div>
                   ))}
                   <div className="flex justify-between text-sm font-black mt-2 pt-2 border-t border-emerald-500/20">
-                    <span className="text-slate-300">Total</span>
-                    <span className="text-emerald-400">Rp {physicalPemasukan.toLocaleString()}</span>
+                    <span className="text-slate-700 dark:text-slate-300">Total</span>
+                    <span className="text-emerald-600 dark:text-emerald-400">Rp {physicalPemasukan.toLocaleString()}</span>
                   </div>
                 </div>
               )}
 
               <div className="grid grid-cols-2 gap-3">
-                <button onClick={() => setStep(1)} className="flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 border border-slate-700/50 text-slate-300 font-bold py-3.5 rounded-2xl transition-all">
+                <button onClick={() => setStep(1)} className="flex items-center justify-center gap-2 bg-white dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200/50 dark:border-slate-700/50 text-slate-700 dark:text-slate-300 font-bold py-3.5 rounded-2xl transition-all">
                   <ChevronLeft size={16} /> Kembali
                 </button>
                 <button onClick={() => setStep(3)} className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3.5 rounded-2xl shadow-lg shadow-indigo-500/25 transition-all">
@@ -477,11 +597,11 @@ export default function Closing() {
               {/* Summary quick view */}
               <div className="grid grid-cols-3 gap-3">
                 {[
-                  { label: 'Expected', value: expectedCash, color: 'text-indigo-400' },
-                  { label: 'Pemasukan', value: finalPemasukan, color: 'text-emerald-400' },
-                  { label: 'Pengeluaran', value: realPengeluaran, color: 'text-red-400' },
+                  { label: 'Expected', value: expectedCash, color: 'text-indigo-600 dark:text-indigo-400' },
+                  { label: 'Pemasukan', value: finalPemasukan, color: 'text-emerald-600 dark:text-emerald-400' },
+                  { label: 'Pengeluaran', value: realPengeluaran, color: 'text-red-600 dark:text-red-400' },
                 ].map(s => (
-                  <div key={s.label} className="bg-slate-800 border border-slate-700/50 rounded-2xl p-3 text-center">
+                  <div key={s.label} className="bg-white dark:bg-slate-800 border border-slate-200/50 dark:border-slate-700/50 rounded-2xl p-3 text-center">
                     <p className="text-[9px] text-slate-500 font-black uppercase tracking-widest mb-1">{s.label}</p>
                     <p className={`text-xs font-black ${s.color}`}>Rp {s.value.toLocaleString()}</p>
                   </div>
@@ -489,13 +609,13 @@ export default function Closing() {
               </div>
 
               <form onSubmit={handleClosing} className="space-y-4">
-                <div className="bg-slate-800 border border-slate-700/50 rounded-3xl p-5">
+                <div className="bg-white dark:bg-slate-800 border border-slate-200/50 dark:border-slate-700/50 rounded-3xl p-5">
                   <div className="flex items-center gap-3 mb-4">
                     <div className="w-9 h-9 bg-blue-500/15 rounded-xl flex items-center justify-center">
-                      <Calculator size={18} className="text-blue-400" />
+                      <Calculator size={18} className="text-blue-600 dark:text-blue-400" />
                     </div>
                     <div>
-                      <h3 className="font-black text-white text-sm">Hitung Fisik Laci</h3>
+                      <h3 className="font-black text-slate-900 dark:text-white text-sm">Hitung Fisik Laci</h3>
                       <p className="text-[10px] text-slate-500 font-bold">Masukkan total uang yang ada di laci</p>
                     </div>
                   </div>
@@ -506,7 +626,7 @@ export default function Closing() {
                       type="number" required
                       value={actualCash}
                       onChange={e => setActualCash(e.target.value)}
-                      className="w-full px-4 py-4 bg-slate-900 border-2 border-slate-700 focus:border-indigo-500 rounded-2xl text-3xl font-black text-white text-center transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                      className="w-full px-4 py-4 bg-slate-100 dark:bg-slate-900 border-2 border-slate-200 dark:border-slate-700 focus:border-indigo-500 rounded-2xl text-3xl font-black text-slate-900 dark:text-white text-center transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                       placeholder="0"
                     />
                   </div>
@@ -514,42 +634,42 @@ export default function Closing() {
 
                 {/* Result breakdown */}
                 {actualCash !== '' && (
-                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-slate-800 border border-slate-700/50 rounded-3xl p-5 space-y-3">
+                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-white dark:bg-slate-800 border border-slate-200/50 dark:border-slate-700/50 rounded-3xl p-5 space-y-3">
                     <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">Rekapitulasi Akhir</h4>
 
                     {totalPhysicalTransfer > 0 && (
                       <div className="flex justify-between items-center text-sm">
-                        <span className="text-indigo-400 font-bold flex items-center gap-1.5"><span>💳</span> Transfer Fisik (ke Bank)</span>
-                        <span className="font-black text-indigo-400">Rp {totalPhysicalTransfer.toLocaleString()}</span>
+                        <span className="text-indigo-600 dark:text-indigo-400 font-bold flex items-center gap-1.5"><span>💳</span> Transfer Fisik (ke Bank)</span>
+                        <span className="font-black text-indigo-600 dark:text-indigo-400">Rp {totalPhysicalTransfer.toLocaleString()}</span>
                       </div>
                     )}
 
                     <div className="flex justify-between items-center">
-                      <span className="text-slate-400 text-sm font-bold">Setoran ke Owner</span>
-                      <span className={`font-black text-xl ${isBelowModal ? 'text-slate-500' : 'text-emerald-400'}`}>
+                      <span className="text-slate-600 dark:text-slate-400 text-sm font-bold">Setoran ke Owner</span>
+                      <span className={`font-black text-xl ${isBelowModal ? 'text-slate-500' : 'text-emerald-600 dark:text-emerald-400'}`}>
                         Rp {setoran.toLocaleString()}
                       </span>
                     </div>
 
                     {isBelowModal && (
-                      <div className="bg-amber-500/10 border border-amber-500/20 p-3 rounded-xl text-[11px] text-amber-400 font-bold leading-relaxed">
+                      <div className="bg-amber-500/10 border border-amber-500/20 p-3 rounded-xl text-[11px] text-amber-600 dark:text-amber-400 font-bold leading-relaxed">
                         ⚠️ Uang fisik di bawah modal awal. Seluruh cash akan digunakan kembali untuk modal shift berikutnya.
                       </div>
                     )}
 
-                    <div className="flex justify-between items-center pt-3 border-t border-slate-700/50">
-                      <span className="text-slate-400 text-sm font-bold">Selisih Fisik vs Sistem</span>
-                      <span className={`font-black text-lg ${selisih === 0 ? 'text-emerald-400' : selisih > 0 ? 'text-blue-400' : 'text-red-400'}`}>
+                    <div className="flex justify-between items-center pt-3 border-t border-slate-200/50 dark:border-slate-700/50">
+                      <span className="text-slate-600 dark:text-slate-400 text-sm font-bold">Selisih Fisik vs Sistem</span>
+                      <span className={`font-black text-lg ${selisih === 0 ? 'text-emerald-600 dark:text-emerald-400' : selisih > 0 ? 'text-blue-600 dark:text-blue-400' : 'text-red-600 dark:text-red-400'}`}>
                         {selisih > 0 ? '+' : ''}{selisih.toLocaleString()}
                       </span>
                     </div>
                     {selisih !== 0 && (
-                      <p className="text-xs text-red-400 font-bold bg-red-500/10 border border-red-500/20 p-2.5 rounded-xl">
+                      <p className="text-xs text-red-600 dark:text-red-400 font-bold bg-red-500/10 border border-red-500/20 p-2.5 rounded-xl">
                         ⚠ Selisih wajib dipertanggungjawabkan ke Owner.
                       </p>
                     )}
                     {selisih === 0 && (
-                      <p className="text-xs text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/20 p-2.5 rounded-xl text-center">
+                      <p className="text-xs text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/20 p-2.5 rounded-xl text-center">
                         ✓ Kas cocok!
                       </p>
                     )}
@@ -557,7 +677,7 @@ export default function Closing() {
                 )}
 
                 <div className="grid grid-cols-2 gap-3">
-                  <button type="button" onClick={() => setStep(2)} className="flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 border border-slate-700/50 text-slate-300 font-bold py-4 rounded-2xl transition-all">
+                  <button type="button" onClick={() => setStep(2)} className="flex items-center justify-center gap-2 bg-white dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200/50 dark:border-slate-700/50 text-slate-700 dark:text-slate-300 font-bold py-4 rounded-2xl transition-all">
                     <ChevronLeft size={16} /> Kembali
                   </button>
                   <button
@@ -573,6 +693,82 @@ export default function Closing() {
           )}
 
         </AnimatePresence>
+
+        {/* Modal Sukses Closing & Cetak RawBT */}
+        {closingSuccessData && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+            <div className="w-full max-w-sm bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-2xl border border-slate-200 dark:border-slate-700 text-center space-y-4 animate-in fade-in zoom-in duration-200">
+              <div className="w-14 h-14 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 rounded-2xl flex items-center justify-center mx-auto">
+                <Check size={28} />
+              </div>
+
+              <div>
+                <h3 className="text-lg font-black text-slate-900 dark:text-white">Closing Selesai!</h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Laporan tersimpan & pesan WA telah dibuka ke Bos.</p>
+              </div>
+
+              <div className="bg-slate-100 dark:bg-slate-900 rounded-2xl p-4 text-left space-y-1.5 border border-slate-200/50 dark:border-slate-800">
+                <div className="flex justify-between text-xs">
+                  <span className="text-slate-500 font-bold">Shift & Kasir</span>
+                  <span className="text-slate-800 dark:text-slate-200 font-black">{closingSuccessData.shift} ({closingSuccessData.user})</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-slate-500 font-bold">Est. Total Laba</span>
+                  <span className="text-emerald-600 dark:text-emerald-400 font-black">Rp {closingSuccessData.totalProfit?.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-slate-500 font-bold">Setoran ke Owner</span>
+                  <span className="text-indigo-600 dark:text-indigo-400 font-black text-sm">Rp {closingSuccessData.setoran?.toLocaleString()}</span>
+                </div>
+                {closingSuccessData.finalBalances && (
+                  <div className="pt-2 mt-2 border-t border-slate-200 dark:border-slate-800">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Posisi Saldo Terakhir</p>
+                    <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+                      <div className="flex justify-between bg-white dark:bg-slate-800 px-2 py-1 rounded-lg">
+                        <span className="text-slate-500">Cash</span>
+                        <span className="font-bold text-slate-800 dark:text-slate-200">Rp {(closingSuccessData.finalBalances.cash || 0).toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between bg-white dark:bg-slate-800 px-2 py-1 rounded-lg">
+                        <span className="text-slate-500">Bank</span>
+                        <span className="font-bold text-slate-800 dark:text-slate-200">Rp {(closingSuccessData.finalBalances.seabank || 0).toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between bg-white dark:bg-slate-800 px-2 py-1 rounded-lg">
+                        <span className="text-slate-500">APK</span>
+                        <span className="font-bold text-slate-800 dark:text-slate-200">Rp {(closingSuccessData.finalBalances.apk || 0).toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between bg-white dark:bg-slate-800 px-2 py-1 rounded-lg">
+                        <span className="text-slate-500">QRIS</span>
+                        <span className="font-bold text-slate-800 dark:text-slate-200">Rp {(closingSuccessData.finalBalances.qris || 0).toLocaleString()}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => printClosingRawBT(closingSuccessData)}
+                  className="w-full py-4 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm shadow-lg shadow-indigo-500/25 flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+                >
+                  <Printer size={18} /> Cetak Struk Closing
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setClosingSuccessData(null);
+                    setUser(null);
+                    navigate('/login');
+                  }}
+                  className="w-full py-3.5 rounded-2xl bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-xs flex items-center justify-center gap-2 transition-all"
+                >
+                  <LogOut size={16} /> Selesai & Keluar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
